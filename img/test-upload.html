@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>文章上傳測試</title>
+</head>
+<body>
+  <h1>新增文章（含圖片）</h1>
+  <form id="uploadForm" enctype="multipart/form-data">
+    <label>分類(kind): <input type="text" name="kind" required></label><br><br>
+    <label>標題(title): <input type="text" name="title" required></label><br><br>
+    <label>內文(content): <textarea name="content" required></textarea></label><br><br>
+    <label>開始日期(startDate): <input type="date" name="startDate" required></label><br><br>
+    <label>結束日期(endDate): <input type="date" name="endDate" required></label><br><br>
+    <label>選擇圖片: <input type="file" name="image" accept="image/*"></label><br><br>
+    <button type="submit">送出</button>
+  </form>
+
+  <div id="result"></div>
+
+  <script>
+    const form = document.getElementById('uploadForm');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const formData = new FormData(form);
+
+      try {
+        const response = await fetch('http://127.0.0.1:3000/admin/articles', {
+          method: 'POST',
+          headers: {
+            'x-group': '1' // Header
+          },
+          body: formData
+        });
+
+        const result = await response.json();
+        document.getElementById('result').innerText = JSON.stringify(result, null, 2);
+
+        if (response.ok) {
+          alert('上傳成功！');
+        } else {
+          alert('上傳失敗...');
+        }
+      } catch (error) {
+        console.error(error);
+        alert('發生錯誤...');
+      }
+    });
+  </script>
+</body>
+</html>

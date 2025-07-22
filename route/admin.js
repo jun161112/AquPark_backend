@@ -1,0 +1,701 @@
+const express = require('express');
+
+const { upload, productUpload } = require('../middlewares/AquImgUpload');
+const checkLogin = require('../middlewares/authMiddleware');
+const handleMulterErrors = require('../middlewares/handleMulterErrors');
+const pool = require('../db');
+
+const router = express.Router();
+
+// 新增文章(含圖)
+/** 
+ * @openapi
+ * /admin/articles:
+ *   post:
+ *     summary: 新增文章
+ *     description: 需有管理員權限才可新增文章
+ *     tags: [Admin - 文章管理]
+ *     security:
+ *       - groupHeader: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - kind
+ *               - title
+ *             properties:
+ *               kind:
+ *                 type: string
+ *                 description: 文章類別
+ *                 example: "test"
+ *               title:
+ *                 type: string
+ *                 description: 文章標題
+ *                 example: "測試文章標題"
+ *               content:
+ *                 type: string
+ *                 description: 文章內容
+ *                 example: "測試文章內文"
+ *               startDate:
+ *                 type: string
+ *                 format: date
+ *                 description: 活動開始日期
+ *                 example: "2025-04-01"
+ *               endDate:
+ *                 type: string
+ *                 format: date
+ *                 description: 活動結束日期
+ *                 example: "2025-04-02"
+ *               image:
+ *                 type: string
+ *                 format: binary
+ *                 description: 上傳圖片檔案
+ *     responses:
+ *       201:
+ *         description: 新增成功，回傳訊息與圖片路徑
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "文章新增成功"
+ *                 imageFilename:
+ *                   type: string
+ *                   example: "/uploads/summer-event.jpg"
+ *       500:
+ *         description: 伺服器錯誤，新增文章失敗
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   example: "資料庫連線失敗"
+*/
+router.post('/articles', 
+    checkLogin(true), 
+    handleMulterErrors(upload.single('image')),  
+    async (req, res) => {
+        const { kind, title, content, startDate, endDate } = req.body;
+        const imageFilename = req.file ? `/uploads/${req.file.filename}` : null;
+
+        try {
+            const conn = await pool.getConnection();
+            await conn.query(
+                'INSERT INTO articles (kind, title, content, startData, endData, imgurl, editTime, createdAt) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())',
+                [kind, title, content, startDate, endDate, imageFilename]
+            );
+            conn.release();
+
+            res.status(201).json({ message: '文章新增成功', imageFilename });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    }
+);
+
+// 修改文章(含圖)
+/**
+ * @openapi
+ * /admin/articles/{id}:
+ *   patch:
+ *     summary: 修改文章
+ *     description: 修改指定 ID 的文章內容與圖片（可選）。
+ *     tags: [Admin - 文章管理]
+ *     security:
+ *       - groupHeader: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: 文章 ID
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               kind:
+ *                 type: string
+ *               title:
+ *                 type: string
+ *               content:
+ *                 type: string
+ *               startDate:
+ *                 type: string
+ *                 format: date
+ *               endDate:
+ *                 type: string
+ *                 format: date
+ *               image:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       200:
+ *         description: 文章已更新
+ *       400:
+ *         description: 無更新欄位
+ *       500:
+ *         description: 伺服器錯誤
+ */
+router.patch('/articles/:id', 
+    checkLogin(true), 
+    upload.single('image'), 
+    async (req, res) => {
+        const { id } = req.params;
+        const { kind, title, content, startDate, endDate } = req.body;
+        const imgurl = req.file ? `/uploads/${req.file.filename}` : null;
+
+        try {
+            const conn = await pool.getConnection();
+
+            // 動態構建 SQL 更新欄位
+            const fieldsToUpdate = [];
+            const values = [];
+
+            if (kind) {
+                fieldsToUpdate.push('kind = ?');
+                values.push(kind);
+            }
+            if (title) {
+                fieldsToUpdate.push('title = ?');
+                values.push(title);
+            }
+            if (content) {
+                fieldsToUpdate.push('content = ?');
+                values.push(content);
+            }
+            if (startDate) {
+                fieldsToUpdate.push('startData = ?');
+                values.push(startDate);
+            }
+            if (endDate) {
+                fieldsToUpdate.push('endData = ?');
+                values.push(endDate);
+            }
+            if (imgurl) {
+                fieldsToUpdate.push('imgurl = ?');
+                values.push(imgurl);
+            }
+
+            if (fieldsToUpdate.length === 0) {
+                conn.release();
+                return res.status(400).json({ error: '沒有需要更新的欄位' });
+            }
+
+            fieldsToUpdate.push('editTime = NOW()'); // 確保更新時間更新
+            const sql = `UPDATE articles SET ${fieldsToUpdate.join(', ')} WHERE id = ?`;
+            values.push(id);
+
+            await conn.query(sql, values);
+            conn.release();
+
+            res.json({ message: '文章已更新' });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    }
+);
+
+// 刪除文章
+/**
+ * @openapi
+ * /admin/articles/{id}:
+ *   delete:
+ *     summary: 刪除文章
+ *     description: 管理員可刪除指定 ID 的文章。
+ *     tags: [Admin - 文章管理]
+ *     security:
+ *       - groupHeader: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: 要刪除的文章 ID
+ *     responses:
+ *       200:
+ *         description: 成功刪除文章
+ *       500:
+ *         description: 伺服器錯誤
+ */
+router.delete('/articles/:id', checkLogin(true), async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        const conn = await pool.getConnection();
+        await conn.query('DELETE FROM articles WHERE id = ?', [id]);
+        conn.release();
+
+        res.json({ message: '文章已刪除' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 新增商品
+/**
+ * @openapi
+ * /admin/products:
+ *   post:
+ *     summary: 新增商品
+ *     description: 管理員新增商品，可包含圖片。
+ *     tags: [Admin - 商品管理]
+ *     security:
+ *       - groupHeader: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - itemGroup
+ *               - title
+ *               - content
+ *               - price
+ *               - salePrice
+ *               - sell
+ *             properties:
+ *               itemGroup:
+ *                 type: string
+ *               title:
+ *                 type: string
+ *               content:
+ *                 type: string
+ *               price:
+ *                 type: number
+ *               salePrice:
+ *                 type: number
+ *               sell:
+ *                 type: boolean
+ *               image:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       201:
+ *         description: 商品新增成功
+ *       500:
+ *         description: 新增失敗
+ */
+router.post('/products', checkLogin(true), productUpload.single('image'), async (req, res) => {
+    const { itemGroup, title, content, price, salePrice, sell } = req.body;
+    const imgFilename = req.file ? `/uploads/products/${req.file.filename}` : null;
+
+    try {
+        const conn = await pool.getConnection();
+        await conn.query(
+            'INSERT INTO products (itemGroup, title, content, price, salePrice, imgUrls, sell, editTime, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())',
+            [itemGroup, title, content, price, salePrice, imgFilename, sell]
+        );
+        conn.release();
+
+        res.status(201).json({ message: '產品新增成功', imgFilename });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 修改商品
+/**
+ * @openapi
+ * /admin/products/{id}:
+ *   patch:
+ *     summary: 修改商品資訊
+ *     description: 可選擇更新任意欄位與圖片（圖片限制：圖檔，最大5MB）
+ *     tags: [Admin - 商品管理]
+ *     security:
+ *       - groupHeader: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: 商品 ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               itemGroup:
+ *                 type: string
+ *                 example: "紀念品"
+ *               title:
+ *                 type: string
+ *                 example: "可愛海豹玩偶"
+ *               content:
+ *                 type: string
+ *                 example: "超柔軟材質，限量發售"
+ *               price:
+ *                 type: number
+ *                 example: 599
+ *               salePrice:
+ *                 type: number
+ *                 example: 499
+ *               sell:
+ *                 type: boolean
+ *                 example: true
+ *               image:
+ *                 type: string
+ *                 format: binary
+ *                 description: 商品圖片（jpg/png/webp/gif/svg，最大5MB）
+ *     responses:
+ *       200:
+ *         description: 商品已更新
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "產品已更新"
+ *                 imgFilename:
+ *                   type: string
+ *                   example: "/uploads/products/img_12efgh.png"
+ *       400:
+ *         description: 沒有需要更新的欄位
+ *       413:
+ *         description: 圖片檔案過大（超過5MB）
+ *       415:
+ *         description: 上傳非圖片檔案
+ *       500:
+ *         description: 伺服器錯誤
+ */
+router.patch('/products/:id', 
+    checkLogin(true), 
+    handleMulterErrors(productUpload.single('image')), 
+    async (req, res) => {
+        const { id } = req.params;
+        const { itemGroup, title, content, price, salePrice, sell } = req.body;
+        const imgFilename = req.file ? `/uploads/products/${req.file.filename}` : null;
+
+        try {
+            const conn = await pool.getConnection();
+            const fieldsToUpdate = [];
+            const values = [];
+
+            if (itemGroup) fieldsToUpdate.push('itemGroup = ?'), values.push(itemGroup);
+            if (title) fieldsToUpdate.push('title = ?'), values.push(title);
+            if (content) fieldsToUpdate.push('content = ?'), values.push(content);
+            if (price) fieldsToUpdate.push('price = ?'), values.push(price);
+            if (salePrice) fieldsToUpdate.push('salePrice = ?'), values.push(salePrice);
+            if (sell) fieldsToUpdate.push('sell = ?'), values.push(sell);
+            if (imgFilename) fieldsToUpdate.push('imgUrls = ?'), values.push(imgFilename);
+
+            if (fieldsToUpdate.length === 0) {
+                conn.release();
+                return res.status(400).json({ error: '沒有需要更新的欄位' });
+            }
+
+            fieldsToUpdate.push('editTime = NOW()');
+            const sql = `UPDATE products SET ${fieldsToUpdate.join(', ')} WHERE id = ?`;
+            values.push(id);
+
+            await conn.query(sql, values);
+            conn.release();
+
+            res.json({ message: '產品已更新', imgFilename });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    }
+);
+
+// 刪除商品 V
+/**
+ * @openapi
+ * /admin/products/{id}:
+ *   delete:
+ *     summary: 刪除商品
+ *     description: 管理員可刪除指定 ID 的商品。
+ *     tags: [Admin - 商品管理]
+ *     security:
+ *       - groupHeader: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: 要刪除的商品 ID
+ *     responses:
+ *       200:
+ *         description: 成功刪除商品
+ *       500:
+ *         description: 伺服器錯誤
+ */
+router.delete('/products/:id', checkLogin(true), async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        const conn = await pool.getConnection();
+        await conn.query('DELETE FROM products WHERE id = ?', [id]);
+        conn.release();
+
+        res.json({ message: '產品已刪除' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+
+// 新增訂單 < 測試用(也可直接上機)
+/**
+ * @openapi
+ * /admin/orders:
+ *   post:
+ *     summary: 新增訂單（測試用）
+ *     description: 新增訂單資料與商品細項。僅管理員可操作。
+ *     tags: [Admin - 訂單管理]
+ *     security:
+ *       - groupHeader: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - orderNumber
+ *               - userId
+ *               - consignee
+ *               - tel
+ *               - address
+ *               - status
+ *               - products
+ *             properties:
+ *               orderNumber:
+ *                 type: string
+ *                 example: "AQ20250620001"
+ *               userId:
+ *                 type: integer
+ *                 example: 3
+ *               consignee:
+ *                 type: string
+ *                 example: "王小明"
+ *               tel:
+ *                 type: string
+ *                 example: "0912345678"
+ *               address:
+ *                 type: string
+ *                 example: "台北市信義區101號"
+ *               status:
+ *                 type: string
+ *                 example: "已付款"
+ *               products:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   required:
+ *                     - productId
+ *                     - productName
+ *                     - salePrice
+ *                     - qty
+ *                   properties:
+ *                     productId:
+ *                       type: integer
+ *                       example: 101
+ *                     productName:
+ *                       type: string
+ *                       example: "鯊魚玩偶"
+ *                     salePrice:
+ *                       type: number
+ *                       example: 499
+ *                     qty:
+ *                       type: integer
+ *                       example: 2
+ *     responses:
+ *       201:
+ *         description: 訂單新增成功
+ *       500:
+ *         description: 伺服器錯誤
+ */
+router.post('/orders', checkLogin(true), async (req, res) => {
+    const { orderNumber, userId, consignee, tel, address, status, products } = req.body;
+
+    try {
+        const conn = await pool.getConnection();
+
+        // 新增訂單基本資料到 orderCustomers 表
+        await conn.query(
+            `INSERT INTO orderCustomers (orderNumber, checkTime, userId, consignee, tel, address, status) 
+             VALUES (?, NOW(), ?, ?, ?, ?, ?)`,
+            [orderNumber, userId, consignee, tel, address, status]
+        );
+
+        // 新增商品明細到 orderInfor 表
+        for (const product of products) {
+            const { productId, productName, salePrice, qty } = product;
+            await conn.query(
+                `INSERT INTO orderInfor (orderNumber, productId, productName, salePrice, qty) 
+                 VALUES (?, ?, ?, ?, ?)`,
+                [orderNumber, productId, productName, salePrice, qty]
+            );
+        }
+
+        conn.release();
+        res.status(201).json({ message: '訂單新增成功' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 查看訂單資訊(單筆)
+/**
+ * @openapi
+ * /admin/orders/{orderNumber}:
+ *   get:
+ *     summary: 查看訂單資訊（單筆）
+ *     description: 根據訂單編號查詢收件人與商品明細。
+ *     tags: [Admin - 訂單管理]
+ *     security:
+ *       - groupHeader: []
+ *     parameters:
+ *       - in: path
+ *         name: orderNumber
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: 訂單編號
+ *     responses:
+ *       200:
+ *         description: 成功回傳訂單資訊
+ *       404:
+ *         description: 找不到該訂單
+ *       500:
+ *         description: 伺服器錯誤
+ */
+router.get('/orders/:orderNumber', checkLogin(true), async (req, res) => {
+    const { orderNumber } = req.params;
+
+    try {
+        const conn = await pool.getConnection();
+        const [rows] = await conn.query(`
+            SELECT 
+                oc.orderNumber,
+                oc.consignee AS recipientName,
+                oc.tel AS recipientPhone,
+                oc.address AS recipientAddress,
+                oi.productName,
+                oi.salePrice,
+                oi.qty,
+                (oi.salePrice * oi.qty) AS productSubtotal
+            FROM orderCustomers AS oc
+            JOIN orderInfor AS oi ON oc.orderNumber = oi.orderNumber
+            WHERE oc.orderNumber = ?
+        `, [orderNumber]);
+
+        conn.release();
+
+        if (rows.length === 0) {
+            return res.status(404).json({ error: '找不到該訂單' });
+        }
+
+        // 聚合單一訂單的資料
+        const order = {
+            orderNumber: rows[0].orderNumber,
+            recipientName: rows[0].recipientName,
+            recipientPhone: rows[0].recipientPhone,
+            recipientAddress: rows[0].recipientAddress,
+            items: [],
+            totalAmount: 0
+        };
+
+        rows.forEach(row => {
+            order.items.push({
+                productName: row.productName,
+                salePrice: row.salePrice,
+                qty: row.qty,
+                productSubtotal: row.productSubtotal
+            });
+            order.totalAmount += row.productSubtotal;
+        });
+
+        res.json(order);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 修改訂單狀態
+/**
+ * @openapi
+ * /admin/orders/{orderNumber}:
+ *   patch:
+ *     summary: 修改訂單狀態
+ *     description: 根據訂單編號更新狀態（例如：已付款、已出貨、已取消）。
+ *     tags: [Admin - 訂單管理]
+ *     security:
+ *       - groupHeader: []
+ *     parameters:
+ *       - in: path
+ *         name: orderNumber
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: 訂單編號
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - status
+ *             properties:
+ *               status:
+ *                 type: string
+ *                 example: "已出貨"
+ *     responses:
+ *       200:
+ *         description: 訂單狀態已更新
+ *       400:
+ *         description: 未提供狀態
+ *       404:
+ *         description: 找不到該訂單
+ *       500:
+ *         description: 伺服器錯誤
+ */
+router.patch('/orders/:orderNumber', checkLogin(true), async (req, res) => {
+    const { orderNumber } = req.params;
+    const { status } = req.body; // 狀態：已付款、已出貨、已取消
+
+    try {
+        const conn = await pool.getConnection();
+
+        if (!status) {
+            conn.release();
+            return res.status(400).json({ error: '必須提供訂單狀態' });
+        }
+
+        const [result] = await conn.query(
+            `UPDATE orderCustomers SET status = ?, checkTime = NOW() WHERE orderNumber = ?`,
+            [status, orderNumber]
+        );
+        conn.release();
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: '找不到該訂單，請確認訂單編號是否正確' });
+        }
+
+        res.json({ message: '訂單狀態已更新' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+module.exports = router;

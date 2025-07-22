@@ -1,0 +1,16 @@
+# 環境變數設定
+.env
+
+# 第三方套件
+node_modules/
+
+# 圖片
+img/uploads
+img/uploads_t
+
+# 資料庫相關
+backup/
+db_data
+
+# 其他
+other/

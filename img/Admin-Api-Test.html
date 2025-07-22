@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>文章 / 商品 上傳測試</title>
+</head>
+<body>
+  <h1>後台上傳整合表單</h1>
+
+  <!-- 新增文章 -->
+  <h2>新增文章</h2>
+  <form class="uploadForm" data-url="http://127.0.0.1:3000/admin/articles" data-method="POST" enctype="multipart/form-data">
+    <label>分類(kind): <input type="text" name="kind" required></label><br><br>
+    <label>標題(title): <input type="text" name="title" required></label><br><br>
+    <label>內文(content): <textarea name="content" required></textarea></label><br><br>
+    <label>開始日期(startDate): <input type="date" name="startDate" required></label><br><br>
+    <label>結束日期(endDate): <input type="date" name="endDate" required></label><br><br>
+    <label>選擇圖片: <input type="file" name="image" accept="image/*"></label><br><br>
+    <button type="submit">送出</button>
+  </form>
+
+  <!-- 修改文章 -->
+  <h2>修改文章</h2>
+  <form class="uploadForm" data-url="http://127.0.0.1:3000/admin/articles" data-method="PATCH" enctype="multipart/form-data">
+    <label>文章ID: <input type="text" name="id" required></label><br><br>
+    <label>分類(kind): <input type="text" name="kind"></label><br><br>
+    <label>標題(title): <input type="text" name="title"></label><br><br>
+    <label>內文(content): <textarea name="content"></textarea></label><br><br>
+    <label>開始日期(startDate): <input type="date" name="startDate"></label><br><br>
+    <label>結束日期(endDate): <input type="date" name="endDate"></label><br><br>
+    <label>選擇圖片: <input type="file" name="image" accept="image/*"></label><br><br>
+    <button type="submit">送出</button>
+  </form>
+
+  <!-- 新增商品 -->
+  <h2>新增商品</h2>
+  <form class="uploadForm" data-url="http://127.0.0.1:3000/admin/products" data-method="POST" enctype="multipart/form-data">
+    <label>類別(itemGroup): <input type="text" name="itemGroup" required></label><br><br>
+    <label>標題(title): <input type="text" name="title" required></label><br><br>
+    <label>描述(content): <textarea name="content" required></textarea></label><br><br>
+    <label>價格(price): <input type="number" name="price" required></label><br><br>
+    <label>特價(salePrice): <input type="number" name="salePrice" required></label><br><br>
+    <label>是否販售(sell): <input type="text" name="sell" required></label><br><br>
+    <label>選擇圖片: <input type="file" name="image" accept="image/*"></label><br><br>
+    <button type="submit">送出</button>
+  </form>
+
+  <!-- 修改商品 -->
+  <h2>修改商品</h2>
+  <form class="uploadForm" data-url="http://127.0.0.1:3000/admin/products" data-method="PATCH" enctype="multipart/form-data">
+    <label>商品ID: <input type="text" name="id" required></label><br><br>
+    <label>類別(itemGroup): <input type="text" name="itemGroup"></label><br><br>
+    <label>標題(title): <input type="text" name="title"></label><br><br>
+    <label>描述(content): <textarea name="content"></textarea></label><br><br>
+    <label>價格(price): <input type="number" name="price"></label><br><br>
+    <label>特價(salePrice): <input type="number" name="salePrice"></label><br><br>
+    <label>是否販售(sell): <input type="text" name="sell"></label><br><br>
+    <label>選擇圖片: <input type="file" name="image" accept="image/*"></label><br><br>
+    <button type="submit">送出</button>
+  </form>
+
+  <div id="result"></div>
+
+  <script>
+    const forms = document.querySelectorAll('.uploadForm');
+
+    forms.forEach(form => {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const formData = new FormData(form);
+        const method = form.dataset.method;
+        let url = form.dataset.url;
+
+        // 若含 id 則加在路徑後面
+        const id = formData.get('id');
+        if (id) {
+          url += `/${id}`;
+          formData.delete('id');
+        }
+
+        try {
+          const response = await fetch(url, {
+            method: method,
+            headers: {
+              'x-group': '1'
+            },
+            body: formData
+          });
+
+          const result = await response.json();
+          document.getElementById('result').innerText = JSON.stringify(result, null, 2);
+
+          alert(response.ok ? '送出成功！' : '送出失敗...');
+        } catch (error) {
+          console.error(error);
+          alert('發生錯誤...');
+        }
+      });
+    });
+  </script>
+</body>
+</html>

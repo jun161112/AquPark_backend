@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>訂單測試工具</title>
+  <style>
+    body { font-family: Arial; padding: 20px; }
+    textarea, input { width: 100%; margin: 5px 0; padding: 5px; }
+    button { margin: 10px 0; padding: 8px 12px; }
+    section { margin-bottom: 30px; border-bottom: 1px solid #ccc; padding-bottom: 20px; }
+    pre { background: #f7f7f7; padding: 10px; }
+  </style>
+</head>
+<body>
+  <h1>訂單 API 測試工具</h1>
+
+  <!-- 新增訂單 -->
+  <section>
+    <h2>新增訂單</h2>
+    <input id="add-orderNumber" placeholder="訂單編號 ORD123" />
+    <input id="add-userId" placeholder="會員 ID" />
+    <input id="add-consignee" placeholder="收件人姓名" />
+    <input id="add-tel" placeholder="電話" />
+    <input id="add-address" placeholder="地址" />
+    <input id="add-status" placeholder="狀態：已付款、待出貨..." />
+    <label>商品明細（JSON 陣列）</label>
+    <textarea id="add-products" rows="5">[
+  {
+    "productId": 1,
+    "productName": "測試商品 A",
+    "salePrice": 300,
+    "qty": 2
+  },
+  {
+    "productId": 2,
+    "productName": "測試商品 B",
+    "salePrice": 500,
+    "qty": 1
+  }
+]</textarea>
+    <button onclick="addOrder()">送出新增訂單</button>
+    <pre id="add-result"></pre>
+  </section>
+
+  <!-- 查詢訂單 -->
+  <section>
+    <h2>查詢訂單資訊</h2>
+    <input id="get-orderNumber" placeholder="訂單編號 ORD123" />
+    <button onclick="getOrder()">查詢</button>
+    <pre id="get-result"></pre>
+  </section>
+
+  <!-- 修改訂單狀態 -->
+  <section>
+    <h2>修改訂單狀態</h2>
+    <input id="patch-orderNumber" placeholder="訂單編號 ORD123" />
+    <input id="patch-status" placeholder="新狀態 如：已出貨、已取消" />
+    <button onclick="updateOrderStatus()">修改狀態</button>
+    <pre id="patch-result"></pre>
+  </section>
+
+  <script>
+    const baseURL = 'http://localhost:3000/admin';
+    const headers = {
+      'Content-Type': 'application/json',
+      'x-group': '1'
+    };
+
+    async function addOrder() {
+      const orderNumber = document.getElementById('add-orderNumber').value;
+      const userId = document.getElementById('add-userId').value;
+      const consignee = document.getElementById('add-consignee').value;
+      const tel = document.getElementById('add-tel').value;
+      const address = document.getElementById('add-address').value;
+      const status = document.getElementById('add-status').value;
+      const products = JSON.parse(document.getElementById('add-products').value);
+
+      try {
+        const res = await fetch(`${baseURL}/orders`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ orderNumber, userId, consignee, tel, address, status, products })
+        });
+        const data = await res.json();
+        document.getElementById('add-result').textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        document.getElementById('add-result').textContent = '錯誤: ' + err.message;
+      }
+    }
+
+    async function getOrder() {
+      const orderNumber = document.getElementById('get-orderNumber').value;
+      try {
+        const res = await fetch(`${baseURL}/orders/${orderNumber}`, {
+          method: 'GET',
+          headers
+        });
+        const data = await res.json();
+        document.getElementById('get-result').textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        document.getElementById('get-result').textContent = '錯誤: ' + err.message;
+      }
+    }
+
+    async function updateOrderStatus() {
+      const orderNumber = document.getElementById('patch-orderNumber').value;
+      const status = document.getElementById('patch-status').value;
+
+      try {
+        const res = await fetch(`${baseURL}/orders/${orderNumber}`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ status })
+        });
+        const data = await res.json();
+        document.getElementById('patch-result').textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        document.getElementById('patch-result').textContent = '錯誤: ' + err.message;
+      }
+    }
+  </script>
+</body>
+</html>

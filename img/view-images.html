@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <title>圖片列表</title>
+  <style>
+    .image-section {
+      margin-bottom: 40px;
+    }
+    .image-card {
+      border: 1px solid #ccc;
+      padding: 10px;
+      margin: 10px;
+      display: inline-block;
+      text-align: center;
+    }
+    .image-card img {
+      width: 200px;
+      display: block;
+      margin-bottom: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>圖片列表</h1>
+
+  <div class="image-section">
+    <h2>文章圖片</h2>
+    <div id="articleContainer"></div>
+  </div>
+
+  <div class="image-section">
+    <h2>商品圖片</h2>
+    <div id="productContainer"></div>
+  </div>
+
+  <script>
+    async function loadArticles() {
+      try {
+        const response = await fetch('http://localhost:3000/articles');
+        const data = await response.json();
+
+        const container = document.getElementById('articleContainer');
+        container.innerHTML = '';
+
+        const shownIds = new Set();
+
+        data.forEach(article => {
+          if (article.imgurl && !shownIds.has(article.id)) {
+            shownIds.add(article.id);
+
+            const card = document.createElement('div');
+            card.className = 'image-card';
+
+            const img = document.createElement('img');
+            img.src = `http://localhost:3000${article.imgurl}`;
+            img.alt = article.title;
+
+            const idText = document.createElement('p');
+            idText.textContent = `ID: ${article.id}`;
+
+            const titleText = document.createElement('p');
+            titleText.textContent = `標題: ${article.title}`;
+
+            const pathText = document.createElement('p');
+            pathText.textContent = `圖片路徑: ${article.imgurl}`;
+
+            card.appendChild(img);
+            card.appendChild(idText);
+            card.appendChild(titleText);
+            card.appendChild(pathText);
+
+            container.appendChild(card);
+          }
+        });
+      } catch (err) {
+        console.error('載入文章圖片時發生錯誤:', err);
+      }
+    }
+
+    async function loadProducts() {
+      try {
+        const response = await fetch('http://localhost:3000/products');
+        const data = await response.json();
+
+        const container = document.getElementById('productContainer');
+        container.innerHTML = '';
+
+        const shownIds = new Set();
+
+        data.forEach(product => {
+          if (product.imgUrls && !shownIds.has(product.id)) {
+            shownIds.add(product.id);
+
+            const card = document.createElement('div');
+            card.className = 'image-card';
+
+            const img = document.createElement('img');
+            img.src = `http://localhost:3000${product.imgUrls}`;
+            img.alt = product.title;
+
+            const idText = document.createElement('p');
+            idText.textContent = `ID: ${product.id}`;
+
+            const titleText = document.createElement('p');
+            titleText.textContent = `標題: ${product.title}`;
+
+            const pathText = document.createElement('p');
+            pathText.textContent = `圖片路徑: ${product.imgUrls}`;
+
+            card.appendChild(img);
+            card.appendChild(idText);
+            card.appendChild(titleText);
+            card.appendChild(pathText);
+
+            container.appendChild(card);
+          }
+        });
+      } catch (err) {
+        console.error('載入商品圖片時發生錯誤:', err);
+      }
+    }
+
+    loadArticles();
+    loadProducts();
+  </script>
+</body>
+</html>
