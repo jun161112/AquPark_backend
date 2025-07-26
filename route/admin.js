@@ -78,8 +78,7 @@ const router = express.Router();
  *                   type: string
  *                   example: "資料庫連線失敗"
 */
-router.post('/articles', 
-    checkLogin(true), 
+router.post('/articles', checkLogin(true), 
     handleMulterErrors(upload.single('image')),  
     async (req, res) => {
         const { kind, title, content, startDate, endDate } = req.body;
@@ -241,6 +240,175 @@ router.delete('/articles/:id', checkLogin(true), async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+
+// 取得文章列表
+/**
+ * @openapi
+ * /admin/articles:
+ *   get:
+ *     summary: 取得文章列表
+ *     description: 管理員可取得所有文章列表，可指定分頁筆數與頁碼。
+ *     tags: [Admin - 文章管理]
+ *     security:
+ *       - groupHeader: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         required: false
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *         description: 頁碼（從 1 開始）
+ *       - in: query
+ *         name: limit
+ *         required: false
+ *         schema:
+ *           type: integer
+ *           enum: [5, 10, 20]
+ *           default: 5
+ *         description: 每頁顯示筆數（5、10 或 20）
+ *     responses:
+ *       200:
+ *         description: 成功取得文章列表
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 total:
+ *                   type: integer
+ *                   example: 56
+ *                 page:
+ *                   type: integer
+ *                   example: 1
+ *                 limit:
+ *                   type: integer
+ *                   example: 10
+ *                 articles:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                       title:
+ *                         type: string
+ *                       kind:
+ *                         type: string
+ *                       content:
+ *                         type: string
+ *                       startData:
+ *                         type: string
+ *                         format: date
+ *                       endData:
+ *                         type: string
+ *                         format: date
+ *                       imgurl:
+ *                         type: string
+ *                       editTime:
+ *                         type: string
+ *                         format: date-time
+ *                       createdAt:
+ *                         type: string
+ *                         format: date-time
+ *       500:
+ *         description: 伺服器錯誤
+ */
+router.get('/articles', checkLogin(true), async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 5;
+    const offset = (page - 1) * limit;
+
+    try {
+        const conn = await pool.getConnection();
+        const [totalRows] = await conn.query('SELECT COUNT(*) AS total FROM articles');
+        const [articles] = await conn.query(
+            'SELECT * FROM articles ORDER BY createdAt ASC LIMIT ? OFFSET ?',
+            [limit, offset]
+        );
+        conn.release();
+
+        res.json({
+            total: totalRows[0].total,
+            page,
+            limit,
+            articles
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// 查詢文章
+/**
+ * @openapi
+ * /admin/articles/{id}:
+ *   get:
+ *     summary: 查詢文章
+ *     description: 管理員可查詢指定 ID 的文章詳細資料。
+ *     tags: [Admin - 文章管理]
+ *     security:
+ *       - groupHeader: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: 文章 ID
+ *     responses:
+ *       200:
+ *         description: 成功取得文章
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 id:
+ *                   type: integer
+ *                 title:
+ *                   type: string
+ *                 kind:
+ *                   type: string
+ *                 content:
+ *                   type: string
+ *                 startData:
+ *                   type: string
+ *                   format: date
+ *                 endData:
+ *                   type: string
+ *                   format: date
+ *                 imgurl:
+ *                   type: string
+ *                 editTime:
+ *                   type: string
+ *                   format: date-time
+ *                 createdAt:
+ *                   type: string
+ *                   format: date-time
+ *       404:
+ *         description: 找不到指定文章
+ *       500:
+ *         description: 伺服器錯誤
+ */
+router.get('/articles/:id', checkLogin(true), async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        const conn = await pool.getConnection();
+        const [rows] = await conn.query('SELECT * FROM articles WHERE id = ?', [id]);
+        conn.release();
+
+        if (rows.length === 0) {
+            return res.status(404).json({ error: '文章不存在' });
+        }
+
+        res.json(rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 
 // 新增商品
 /**
