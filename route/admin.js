@@ -445,7 +445,10 @@ router.get('/articles/:id', checkLogin(true), async (req, res) => {
  *               salePrice:
  *                 type: number
  *               sell:
- *                 type: boolean
+ *                 type: integer
+ *                 enum: [0, 1]
+ *                 example: 1
+ *                 description: "是否上架（1=上架, 0=下架）"
  *               image:
  *                 type: string
  *                 format: binary
@@ -513,8 +516,10 @@ router.post('/products', checkLogin(true), productUpload.single('image'), async 
  *                 type: number
  *                 example: 499
  *               sell:
- *                 type: boolean
- *                 example: true
+ *                 type: integer
+ *                 enum: [0, 1]
+ *                 example: 1
+ *                 description: "是否上架（1=上架, 0=下架）"
  *               image:
  *                 type: string
  *                 format: binary
@@ -582,7 +587,7 @@ router.patch('/products/:id',
     }
 );
 
-// 刪除商品 V
+// 刪除商品
 /**
  * @openapi
  * /admin/products/{id}:
@@ -619,6 +624,312 @@ router.delete('/products/:id', checkLogin(true), async (req, res) => {
     }
 });
 
+// 顯示所有商品
+/**
+ * @openapi
+ * /admin/products:
+ *   get:
+ *     summary: 查詢商品列表
+ *     description: 管理員可依條件查詢商品列表，支援分頁、分類過濾、模糊搜尋、販售狀態與排序方式。
+ *     tags: [Admin - 商品管理]
+ *     security:
+ *       - groupHeader: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *         description: 頁碼（從 1 開始）
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           enum: [5, 10, 20]
+ *           default: 10
+ *         description: 每頁顯示筆數（5、10 或 20）
+ *       - in: query
+ *         name: itemGroup
+ *         schema:
+ *           type: string
+ *         description: 商品分類（itemGroup），若未指定則顯示全部
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: 模糊搜尋商品標題與內容
+ *       - in: query
+ *         name: sell
+ *         schema:
+ *           type: string
+ *           enum: [true, false]
+ *         description: 是否販售中（true：上架中，false：下架）
+ *       - in: query
+ *         name: sortPrice
+ *         schema:
+ *           type: string
+ *           enum: [asc, desc]
+ *         description: 價格排序方式（asc：低到高，desc：高到低）
+ *       - in: query
+ *         name: sortById
+ *         schema:
+ *           type: string
+ *           enum: [true, false]
+ *           default: true
+ *         description: 是否依商品編號排序（預設 true）
+ *     responses:
+ *       200:
+ *         description: 成功取得商品列表
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 total:
+ *                   type: integer
+ *                   example: 42
+ *                 page:
+ *                   type: integer
+ *                   example: 1
+ *                 limit:
+ *                   type: integer
+ *                   example: 10
+ *                 products:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                       itemGroup:
+ *                         type: string
+ *                       title:
+ *                         type: string
+ *                       content:
+ *                         type: string
+ *                       price:
+ *                         type: number
+ *                       salePrice:
+ *                         type: number
+ *                       imgUrls:
+ *                         type: string
+ *                       sell:
+ *                         type: boolean
+ *                       editTime:
+ *                         type: string
+ *                         format: date-time
+ *                       createdAt:
+ *                         type: string
+ *                         format: date-time
+ *       500:
+ *         description: 伺服器錯誤
+ */
+router.get('/products', checkLogin(true), async (req, res) => {
+  const {
+    itemGroup,
+    search,
+    sell,
+    sortPrice,
+    sortById = 'true',
+    page = 1,
+    limit = 10
+  } = req.query;
+
+  const offset = (Math.max(1, parseInt(page)) - 1) * parseInt(limit);
+  const filters = [];
+  const params = [];
+
+  // 分類過濾
+  if (itemGroup) {
+    filters.push('itemGroup = ?');
+    params.push(itemGroup);
+  }
+
+  // 模糊搜尋
+  if (search) {
+    filters.push('(title LIKE ? OR content LIKE ?)');
+    const keyword = `%${search}%`;
+    params.push(keyword, keyword);
+  }
+
+  // 是否販售中
+  if (sell === 'true') filters.push('sell = 1');
+  if (sell === 'false') filters.push('sell = 0');
+
+  const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+
+  // 排序邏輯
+  let orderClause = 'ORDER BY id ASC'; // 預設使用商品編號排序
+
+  if (sortPrice === 'asc') {
+    orderClause = 'ORDER BY price ASC';
+  } else if (sortPrice === 'desc') {
+    orderClause = 'ORDER BY price DESC';
+  } else if (sortById === 'false') {
+    orderClause = ''; // 若不想依編號排序
+  }
+
+  try {
+    const conn = await pool.getConnection();
+
+    // 取得總筆數
+    const [countRows] = await conn.query(
+      `SELECT COUNT(*) AS total FROM products ${whereClause}`,
+      params
+    );
+
+    // 取得資料內容
+    const [products] = await conn.query(
+      `SELECT * FROM products ${whereClause} ${orderClause} LIMIT ? OFFSET ?`,
+      [...params, parseInt(limit), offset]
+    );
+
+    conn.release();
+
+    res.json({
+      total: countRows[0].total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      products
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 查詢商品
+/**
+ * @openapi
+ * /admin/products/search:
+ *   get:
+ *     summary: 商品查詢（精準 + 模糊）
+ *     description: 管理員可依條件查詢商品，固定一次顯示 5 筆，支援精準搜尋與模糊搜尋。
+ *     tags: [Admin - 商品管理]
+ *     security:
+ *       - groupHeader: []
+ *     parameters:
+ *       - in: query
+ *         name: id
+ *         schema:
+ *           type: integer
+ *         description: 精準搜尋 - 商品 ID
+ *       - in: query
+ *         name: itemGroup
+ *         schema:
+ *           type: string
+ *         description: 精準搜尋 - 商品分類
+ *       - in: query
+ *         name: keyword
+ *         schema:
+ *           type: string
+ *         description: 模糊搜尋關鍵字（會比對標題與內容）
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *         description: 頁碼（從 1 開始）
+ *     responses:
+ *       200:
+ *         description: 查詢成功
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 total:
+ *                   type: integer
+ *                   example: 12
+ *                 page:
+ *                   type: integer
+ *                   example: 1
+ *                 limit:
+ *                   type: integer
+ *                   example: 5
+ *                 products:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: integer
+ *                       itemGroup:
+ *                         type: string
+ *                       title:
+ *                         type: string
+ *                       content:
+ *                         type: string
+ *                       price:
+ *                         type: number
+ *                       salePrice:
+ *                         type: number
+ *                       imgUrls:
+ *                         type: string
+ *                       sell:
+ *                         type: boolean
+ *                       editTime:
+ *                         type: string
+ *                         format: date-time
+ *                       createdAt:
+ *                         type: string
+ *                         format: date-time
+ *       500:
+ *         description: 伺服器錯誤
+ */
+router.get('/products/search', checkLogin(true), async (req, res) => {
+  const { id, itemGroup, keyword, page = 1 } = req.query;
+  const limit = 5;
+  const offset = (Math.max(1, parseInt(page)) - 1) * limit;
+
+  const filters = [];
+  const params = [];
+
+  // 精準搜尋條件
+  if (id) {
+    filters.push('id = ?');
+    params.push(id);
+  }
+  if (itemGroup) {
+    filters.push('itemGroup = ?');
+    params.push(itemGroup);
+  }
+
+  // 模糊搜尋條件
+  if (keyword) {
+    filters.push('(title LIKE ? OR content LIKE ?)');
+    const kw = `%${keyword}%`;
+    params.push(kw, kw);
+  }
+
+  const whereClause = filters.length ? `WHERE ${filters.join(' OR ')}` : '';
+
+  try {
+    const conn = await pool.getConnection();
+
+    // 總筆數
+    const [countRows] = await conn.query(
+      `SELECT COUNT(*) AS total FROM products ${whereClause}`,
+      params
+    );
+
+    // 查詢資料
+    const [products] = await conn.query(
+      `SELECT * FROM products ${whereClause} ORDER BY id ASC LIMIT ? OFFSET ?`,
+      [...params, limit, offset]
+    );
+
+    conn.release();
+
+    res.json({
+      total: countRows[0].total,
+      page: parseInt(page),
+      limit,
+      products
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 
 // 新增訂單 < 測試用(也可直接上機)
