@@ -1,7 +1,7 @@
 const express = require('express');
 const pool = require('../db');
 const checkLogin = require('../middlewares/authMiddleware');
-// const authorizeOwnerOrAdmin = require('../middlewares/authorizeOwnerOrAdmin');
+const authorizeOwnerOrAdmin = require('../middlewares/authorizeOwnerOrAdmin');
 
 const router = express.Router();
 
@@ -50,37 +50,30 @@ const router = express.Router();
  *       500:
  *         description: 伺服器錯誤
  */
-router.get('/', checkLogin(false), async (req, res) => {
-  const userId = req.userId;
-  const isAdmin = req.isAdmin;
-  const { targetUserId } = req.query;
+router.get('/', checkLogin(false), authorizeOwnerOrAdmin({ source: 'query', key: 'targetUserId' }), async (req, res) => {
+    const userId = req.effectiveUserId;
 
-  if (targetUserId && !isAdmin) {
-    return res.status(400).json({ error: '權限不足' });
-  }
-  const effectiveUserId = targetUserId ? Number(targetUserId) : userId;
-
-  try {
-    const conn = await pool.getConnection();
-    const [rows] = await conn.query(
-      `SELECT
-         c.id AS cartId,
-         c.productId,
-         p.title,
-         p.price,
-         p.salePrice,
-         p.imgUrls,
-         c.qty
-       FROM cart c
-       JOIN products p ON c.productId = p.id
-       WHERE c.userId = ?`,
-      [effectiveUserId]
-    );
-    conn.release();
-    res.json(rows);
-  } catch (err) {
+    try {
+        const conn = await pool.getConnection();
+        const [rows] = await conn.query(
+        `SELECT
+            c.id AS cartId,
+            c.productId,
+            p.title,
+            p.price,
+            p.salePrice,
+            p.imgUrls,
+            c.qty
+        FROM cart c
+        JOIN products p ON c.productId = p.id
+        WHERE c.userId = ?`,
+        [userId]
+        );
+        conn.release();
+        res.json(rows);
+    } catch (err) {
     res.status(500).json({ error: err.message });
-  }
+    }
 });
 
 // 新增至購物車
@@ -120,18 +113,13 @@ router.get('/', checkLogin(false), async (req, res) => {
  *       500:
  *         description: 伺服器錯誤
  */
-router.post('/', checkLogin(false), async (req, res) => {
-  const userId = req.userId;
-  const isAdmin = req.isAdmin;
-  const { productId, qty, targetUserId } = req.body;
+router.post('/', checkLogin(false), authorizeOwnerOrAdmin({ source: 'body', key: 'targetUserId' }), async (req, res) => {
+  const userId = req.effectiveUserId;
+  const { productId, qty } = req.body;
 
   if (!productId || !qty) {
     return res.status(400).json({ error: '請提供 productId 與 qty' });
   }
-  if (targetUserId && !isAdmin) {
-    return res.status(400).json({ error: '權限不足' });
-  }
-  const effectiveUserId = targetUserId || userId;
 
   try {
     const conn = await pool.getConnection();
@@ -149,7 +137,7 @@ router.post('/', checkLogin(false), async (req, res) => {
     // 檢查是否已在購物車
     const [cartRows] = await conn.query(
       'SELECT id, qty FROM cart WHERE userId = ? AND productId = ?',
-      [effectiveUserId, productId]
+      [userId, productId]
     );
     if (cartRows.length > 0) {
       await conn.query(
@@ -159,7 +147,7 @@ router.post('/', checkLogin(false), async (req, res) => {
     } else {
       await conn.query(
         'INSERT INTO cart (userId, productId, qty) VALUES (?, ?, ?)',
-        [effectiveUserId, productId, qty]
+        [userId, productId, qty]
       );
     }
 
@@ -175,7 +163,7 @@ router.post('/', checkLogin(false), async (req, res) => {
  * @openapi
  * /cart:
  *   patch:
- *     summary: 更新購物車項目數量或刪除（qty=0）
+ *     summary: 更新購物車項目數量或刪除
  *     description: |
  *       管理員可更新任意使用者的購物車；一般使用者僅能更新自己的。  
  *       qty < 0 回傳 400；qty = 0 等同刪除該品項。  
@@ -211,62 +199,53 @@ router.post('/', checkLogin(false), async (req, res) => {
  *       500:
  *         description: 伺服器錯誤
  */
-router.patch('/', checkLogin(false), async (req, res) => {
-  const userId = req.userId;
-  const isAdmin = req.isAdmin;
-  const { productId, qty, targetUserId } = req.body;
+router.patch('/', checkLogin(false), authorizeOwnerOrAdmin({ source: 'body', key: 'targetUserId' }), async (req, res) => {
+    const userId = req.effectiveUserId;
+    const { productId, qty } = req.body;
 
-  // 欄位檢查
-  if (typeof productId !== 'number' || typeof qty !== 'number') {
-    return res.status(400).json({ error: '請提供 productId 與數字型別 qty' });
-  }
-  if (!isAdmin && targetUserId) {
-    return res.status(400).json({ error: '權限不足' });
-  }
-
-  const effectiveUserId = isAdmin && targetUserId
-    ? Number(targetUserId)
-    : userId;
-
-  // 數量驗證
-  if (qty < 0) {
-    return res.status(400).json({ error: 'qty 不能小於 0' });
-  }
-
-  try {
-    const conn = await pool.getConnection();
-
-    // 確認該使用者的購物車中有此商品
-    const [rows] = await conn.query(
-      'SELECT qty FROM cart WHERE userId = ? AND productId = ?',
-      [effectiveUserId, productId]
-    );
-    if (rows.length === 0) {
-      conn.release();
-      return res.status(404).json({ error: '購物車中不存在此商品' });
+    // 欄位檢查
+    if (typeof productId !== 'number' || typeof qty !== 'number') {
+        return res.status(400).json({ error: '請提供 productId 與數字型別 qty' });
     }
 
-    if (qty === 0) {
-      // qty=0 當作刪除
-      await conn.query(
-        'DELETE FROM cart WHERE userId = ? AND productId = ?',
-        [effectiveUserId, productId]
-      );
-      conn.release();
-      return res.json({ message: '商品已從購物車移除' });
+    // 數量驗證
+    if (qty < 0) {
+        return res.status(400).json({ error: 'qty 不能小於 0' });
     }
 
-    // qty > 0 更新數量
-    await conn.query(
-      'UPDATE cart SET qty = ? WHERE userId = ? AND productId = ?',
-      [qty, effectiveUserId, productId]
-    );
-    conn.release();
-    res.json({ message: '購物車數量已更新' });
+    try {
+        const conn = await pool.getConnection();
 
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+        // 確認該使用者的購物車中有此商品
+        const [rows] = await conn.query(
+            'SELECT qty FROM cart WHERE userId = ? AND productId = ?',
+            [userId, productId]
+        );
+        if (rows.length === 0) {
+            conn.release();
+            return res.status(404).json({ error: '購物車中不存在此商品' });
+        }
+
+        if (qty === 0) {
+            // qty=0 當作刪除
+            await conn.query(
+                'DELETE FROM cart WHERE userId = ? AND productId = ?',
+                [userId, productId]
+            );
+            conn.release();
+            return res.json({ message: '商品已從購物車移除' });
+        }
+
+        // qty > 0 更新數量
+        await conn.query(
+            'UPDATE cart SET qty = ? WHERE userId = ? AND productId = ?',
+            [qty, userId, productId]
+        );
+        conn.release();
+        res.json({ message: '購物車數量已更新' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // 刪除購物車項目
@@ -301,42 +280,32 @@ router.patch('/', checkLogin(false), async (req, res) => {
  *       500:
  *         description: 伺服器錯誤
  */
-router.delete('/:productId', checkLogin(false), async (req, res) => {
-  const userId = req.userId;
-  const isAdmin = req.isAdmin;
-  const { productId } = req.params;
-  const { targetUserId } = req.query;
+router.delete('/:productId', checkLogin(false), authorizeOwnerOrAdmin({ source: 'query', key: 'targetUserId' }), async (req, res) => {
+    const userId = req.effectiveUserId;
+    const productId = Number(req.params.productId);
 
-  if (!isAdmin && targetUserId) {
-    return res.status(400).json({ error: '權限不足' });
-  }
-  const effectiveUserId = isAdmin && targetUserId
-    ? Number(targetUserId)
-    : userId;
+    try {
+        const conn = await pool.getConnection();
 
-  try {
-    const conn = await pool.getConnection();
+        // 確認存在
+        const [rows] = await conn.query(
+            'SELECT id FROM cart WHERE userId = ? AND productId = ?',
+            [userId, productId]
+        );
+        if (rows.length === 0) {
+            conn.release();
+            return res.status(404).json({ error: '購物車中不存在此商品' });
+        }
 
-    // 確認存在
-    const [rows] = await conn.query(
-      'SELECT id FROM cart WHERE userId = ? AND productId = ?',
-      [effectiveUserId, productId]
-    );
-    if (rows.length === 0) {
-      conn.release();
-      return res.status(404).json({ error: '購物車中不存在此商品' });
+        await conn.query(
+            'DELETE FROM cart WHERE userId = ? AND productId = ?',
+            [userId, productId]
+        );
+        conn.release();
+        res.json({ message: '商品已從購物車刪除' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
-
-    await conn.query(
-      'DELETE FROM cart WHERE userId = ? AND productId = ?',
-      [effectiveUserId, productId]
-    );
-    conn.release();
-    res.json({ message: '商品已從購物車刪除' });
-
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
 });
 
 // 建立訂單並清空購物車
@@ -396,82 +365,74 @@ router.delete('/:productId', checkLogin(false), async (req, res) => {
  *       500:
  *         description: 伺服器錯誤
  */
-router.post('/orders', checkLogin(false), async (req, res) => {
+router.post('/orders', checkLogin(false), authorizeOwnerOrAdmin({ source: 'body', key: 'userId' }), async (req, res) => {
   // 從 middleware 拿到實際登入者 ID
-  const currentUserId = req.userId;
+    const userId = req.effectiveUserId;
+    const { consignee, tel, address } = req.body;
 
-  // 從 body 拿到目標購物車所屬 userId 及收件資訊
-  const { userId: targetUserId, consignee, tel, address } = req.body;
-
-  // 欄位驗證
-  if (!targetUserId || !consignee || !tel || !address) {
-    return res.status(400).json({ error: '請提供 userId、consignee、tel、address' });
-  }
-
-  // 確認操作使用者與目標 userId 相同
-  if (currentUserId != targetUserId) {
-    return res.status(403).json({ error: '無權操作此購物車' });
-  }
-
-  let conn;
-  try {
-    conn = await pool.getConnection();
-    await conn.beginTransaction();
-
-    // 取出該 userId 的購物車所有項目
-    const [cartItems] = await conn.query(
-      `SELECT 
-         c.productId, p.title AS productName, p.salePrice, c.qty
-       FROM cart c
-       JOIN products p ON c.productId = p.id
-       WHERE c.userId = ?`,
-      [targetUserId]
-    );
-    if (cartItems.length === 0) {
-      await conn.rollback();
-      return res.status(400).json({ error: '購物車為空，無法結帳' });
+    if (!consignee || !tel || !address) {
+        return res.status(400).json({ error: '請提供 consignee、tel、address' });
     }
 
-    // 隨機生成 10 位訂單編號
-    let orderNumber = '';
-    for (let i = 0; i < 10; i++) {
-      orderNumber += Math.floor(Math.random() * 10);
-    }
-    const status = '已付款';
+    let conn;
+    try {
+        conn = await pool.getConnection();
+        await conn.beginTransaction();
 
-    // 插入訂單主檔
-    await conn.query(
-      `INSERT INTO orderCustomers
-         (orderNumber, checkTime, userId, consignee, tel, address, status)
-       VALUES (?, NOW(), ?, ?, ?, ?, ?)`,
-      [orderNumber, targetUserId, consignee, tel, address, status]
-    );
+        // 取出該 userId 的購物車所有項目
+        const [cartItems] = await conn.query(
+            `SELECT 
+                c.productId, p.title AS productName, p.salePrice, c.qty
+            FROM cart c
+            JOIN products p ON c.productId = p.id
+            WHERE c.userId = ?`,
+            [userId]
+        );
+        if (cartItems.length === 0) {
+            await conn.rollback();
+            return res.status(400).json({ error: '購物車為空，無法結帳' });
+        }
 
-    // 插入每筆訂單明細
-    for (const item of cartItems) {
-      await conn.query(
-        `INSERT INTO orderInfor
-           (orderNumber, productId, productName, salePrice, qty)
-         VALUES (?, ?, ?, ?, ?)`,
-        [orderNumber, item.productId, item.productName, item.salePrice, item.qty]
-      );
-    }
+        // 隨機生成 10 位訂單編號
+        let orderNumber = '';
+        for (let i = 0; i < 10; i++) {
+            orderNumber += Math.floor(Math.random() * 10);
+        }
+        const status = '已付款';
 
-    // 清空購物車
-    await conn.query(`DELETE FROM cart WHERE userId = ?`, [targetUserId]);
+        // 插入訂單主檔
+        await conn.query(
+            `INSERT INTO orderCustomers
+                (orderNumber, checkTime, userId, consignee, tel, address, status)
+            VALUES (?, NOW(), ?, ?, ?, ?, ?)`,
+            [orderNumber, userId, consignee, tel, address, status]
+        );
 
-    await conn.commit();
-    res.status(201).json({ message: '訂單建立成功', orderNumber });
-  } catch (err) {
-    if (conn) {
-      await conn.rollback();
+        // 插入每筆訂單明細
+        for (const item of cartItems) {
+        await conn.query(
+            `INSERT INTO orderInfor
+            (orderNumber, productId, productName, salePrice, qty)
+            VALUES (?, ?, ?, ?, ?)`,
+            [orderNumber, item.productId, item.productName, item.salePrice, item.qty]
+        );
+        }
+
+        // 清空購物車
+        await conn.query(`DELETE FROM cart WHERE userId = ?`, [userId]);
+
+        await conn.commit();
+        res.status(201).json({ message: '訂單建立成功', orderNumber });
+    } catch (err) {
+        if (conn) {
+            await conn.rollback();
+        }
+        res.status(500).json({ error: err.message });
+    } finally {
+        if (conn) {
+            conn.release();
+        }
     }
-    res.status(500).json({ error: err.message });
-  } finally {
-    if (conn) {
-      conn.release();
-    }
-  }
 });
 
 module.exports = router;
