@@ -8,7 +8,7 @@ const usersRouter = require('./route/users');
 const adminRouter = require('./route/admin');
 const ticketsRouter = require('./route/tickets');
 const cartRouter = require('./route/cart');
-const checkLogin = require('./middlewares/authMiddleware');
+const {checkLogin} = require('./middlewares/authMiddleware');
 const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./swagger");
 

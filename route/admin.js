@@ -1,7 +1,7 @@
 const express = require('express');
 
 const { upload, productUpload } = require('../middlewares/AquImgUpload');
-const checkLogin = require('../middlewares/authMiddleware');
+const {checkLogin} = require('../middlewares/authMiddleware');
 const handleMulterErrors = require('../middlewares/handleMulterErrors');
 const pool = require('../db');
 
