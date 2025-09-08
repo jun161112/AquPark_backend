@@ -1,6 +1,7 @@
 /*
 此程式碼是為了判斷用戶是否登入，並確認是否有管理員資格(可關閉)
 */
+const pool = require('../db');
 /**
  * 檢查使用者是否已登入，並（可選）檢查管理員
  * @param {boolean} requireAdmin
