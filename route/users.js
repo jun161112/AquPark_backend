@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcrypt');
 const pool = require('../db');
 const {checkLogin} = require('../middlewares/authMiddleware');
+const authorizeOwnerOrAdmin = require('../middlewares/authorizeOwnerOrAdmin');
 
 const router = express.Router();
 
@@ -231,85 +232,92 @@ router.post('/register', async (req, res) => {
  *       500:
  *         description: 伺服器錯誤
  */
-router.patch('/profile', checkLogin(false), async (req, res) => {
-    const { userName, email, tel, password, targetUserId } = req.body;
-    const userId = req.userId;
-    const isAdmin = req.isAdmin;
+router.patch('/profile', checkLogin(false), authorizeOwnerOrAdmin({ source: 'body', key: 'targetUserId' }), async (req, res) => {
+    const userId = req.effectiveUserId;
+    const { userName, email, tel, password } = req.body;
+
+    // 動態組 SQL 欄位
+    const fields = [];
+    const values = [];
+
+    if (userName) {
+      fields.push('userName = ?');
+      values.push(userName);
+    }
+    if (email) {
+      fields.push('email = ?');
+      values.push(email);
+    }
+    if (tel) {
+      fields.push('tel = ?');
+      values.push(tel);
+    }
+    if (password) {
+      const hash = await bcrypt.hash(password, 10);
+      fields.push('password = ?');
+      values.push(hash);
+    }
+
+    if (fields.length === 0) {
+      return res
+        .status(400)
+        .json({ error: '沒有提供任何需要更新的欄位' });
+    }
+
+    fields.push('editTime = NOW()');
+    const sql = `UPDATE users SET ${fields.join(', ')} WHERE id = ?`;
+    values.push(userId);
 
     try {
-        const conn = await pool.getConnection();
-
-        // 如果一般用戶試圖修改其他用戶資料
-        if (targetUserId && !isAdmin) {
-            conn.release();
-            return res.status(400).json({ error: '帳號權限不足。' });
-        }
-
-        // 確定要修改的用戶ID：如果是一般用戶，targetUserId 默認為自己的ID
-        const effectiveUserId = targetUserId || userId;
-
-         // 動態構建 SQL 的字段更新部分
-        const fieldsToUpdate = [];
-        const values = [];
-
-        if (userName) {
-            fieldsToUpdate.push('userName = ?');
-            values.push(userName);
-        }
-        if (email) {
-            fieldsToUpdate.push('email = ?');
-            values.push(email);
-        }
-        if (tel) {
-            fieldsToUpdate.push('tel = ?');
-            values.push(tel);
-        }
-        if (password) {
-            const hashedPassword = await bcrypt.hash(password, 10);
-            fieldsToUpdate.push('password = ?');
-            values.push(hashedPassword);
-        }
-
-        if (fieldsToUpdate.length === 0) {
-            conn.release();
-            return res.status(400).json({ error: '沒有提供任何需要更新的字段' });
-        }
-
-        fieldsToUpdate.push('editTime = NOW()');
-        const sql = `UPDATE users SET ${fieldsToUpdate.join(', ')} WHERE id = ?`;
-        values.push(effectiveUserId);
-
-        await conn.query(sql, values);
-        conn.release();
-
-        res.json({ message: '資料已更新' });
+      const conn = await pool.getConnection();
+      await conn.query(sql, values);
+      conn.release();
+      res.json({ message: '資料已更新' });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+      res.status(500).json({ error: err.message });
     }
 });
 
-// 取得所有使用者 < 測試用
+// 取得使用者
 /**
  * @openapi
- * /users:
+ * /users/{userId}:
  *   get:
- *     summary: 取得所有使用者 (僅限管理員)
+ *     summary: 查詢使用者
+ *     description: 
+ *       非管理員使用者僅能查看自己的資料；  
+ *       管理員可指定任何 userId。
  *     tags: [Users - 會員管理]
  *     security:
  *       - groupHeader: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: 欲查詢的使用者 ID
  *     responses:
  *       200:
- *         description: 成功取得所有使用者資訊
- *       401:
+ *         description: 成功回傳單一使用者資訊
+ *       403:
  *         description: 權限不足
+ *       404:
+ *         description: 找不到該使用者
  *       500:
  *         description: 伺服器錯誤
  */
-router.get('/', checkLogin(true), async (req, res) => {
+router.get('/:userId', checkLogin(false), authorizeOwnerOrAdmin({ source: 'params', key: 'userId' }), async (req, res) => {
+    const userId = req.effectiveUserId;
+
     try {
         const conn = await pool.getConnection();
-        const [rows] = await conn.query('SELECT id, admin, userName, email, tel, editTime, password FROM users');
+        const [rows] = await conn.query('SELECT id, admin, userName, email, tel, editTime FROM users WHERE id = ?', [userId]);
         conn.release();
+
+      if (rows.length === 0) {
+        return res.status(404).json({ error: '找不到該使用者' });
+      }
         res.json(rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
