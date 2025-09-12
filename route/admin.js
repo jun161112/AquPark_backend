@@ -1039,7 +1039,10 @@ router.post('/orders', checkLogin(true), async (req, res) => {
  * /admin/orders/{orderNumber}:
  *   get:
  *     summary: 查看訂單資訊（單筆）
- *     description: 根據訂單編號查詢收件人與商品明細。
+ *     description: 
+ *       - 根據訂單編號查詢收件人與商品明細
+ *       - 一般會員只能查看自己的訂單  
+ *       - 管理員可查看所有訂單
  *     tags: [Admin - 訂單管理]
  *     security:
  *       - groupHeader: []
@@ -1053,16 +1056,38 @@ router.post('/orders', checkLogin(true), async (req, res) => {
  *     responses:
  *       200:
  *         description: 成功回傳訂單資訊
+ *       403:
+ *         description: 權限不足
  *       404:
  *         description: 找不到該訂單
  *       500:
  *         description: 伺服器錯誤
  */
-router.get('/orders/:orderNumber', checkLogin(true), async (req, res) => {
+router.get('/orders/:orderNumber', checkLogin(false), async (req, res) => {
     const { orderNumber } = req.params;
+    const currentUserId = req.userId;
+    const isAdmin = req.isAdmin;
+    let conn;
 
     try {
         const conn = await pool.getConnection();
+
+        // 1. 查訂單擁有者
+        const [ownerRows] = await conn.query(
+            'SELECT userId FROM orderCustomers WHERE orderNumber = ?',
+            [orderNumber]
+        );
+        if (ownerRows.length === 0) {
+            return res.status(404).json({ error: '找不到該訂單' });
+        }
+
+        // 2. 權限檢查
+        const ownerId = ownerRows[0].userId;
+        if (!isAdmin && ownerId !== currentUserId) {
+            return res.status(403).json({ error: '權限不足' });
+        }
+
+        // 3. 取得訂單明細
         const [rows] = await conn.query(`
             SELECT 
                 oc.orderNumber,
@@ -1078,13 +1103,11 @@ router.get('/orders/:orderNumber', checkLogin(true), async (req, res) => {
             WHERE oc.orderNumber = ?
         `, [orderNumber]);
 
-        conn.release();
-
         if (rows.length === 0) {
             return res.status(404).json({ error: '找不到該訂單' });
         }
 
-        // 聚合單一訂單的資料
+        // 4. 聚合回傳單一訂單的資料
         const order = {
             orderNumber: rows[0].orderNumber,
             recipientName: rows[0].recipientName,
@@ -1107,6 +1130,8 @@ router.get('/orders/:orderNumber', checkLogin(true), async (req, res) => {
         res.json(order);
     } catch (err) {
         res.status(500).json({ error: err.message });
+    } finally {
+        if (conn) conn.release();
     }
 });
 
