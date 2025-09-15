@@ -247,26 +247,21 @@ router.delete('/articles/:id', checkLogin(true), async (req, res) => {
  * /admin/articles:
  *   get:
  *     summary: 取得文章列表
- *     description: 管理員可取得所有文章列表，可指定分頁筆數與頁碼。
+ *     description: 取得所有文章列表，可指定分頁筆數與頁碼。
  *     tags: [Admin - 文章管理]
- *     security:
- *       - groupHeader: []
  *     parameters:
  *       - in: query
  *         name: page
- *         required: false
  *         schema:
  *           type: integer
  *           default: 1
  *         description: 頁碼（從 1 開始）
  *       - in: query
  *         name: limit
- *         required: false
  *         schema:
  *           type: integer
- *           enum: [5, 10, 20]
  *           default: 5
- *         description: 每頁顯示筆數（5、10 或 20）
+ *         description: 每頁顯示筆數，預設5筆，可自由輸入整數。
  *     responses:
  *       200:
  *         description: 成功取得文章列表
@@ -314,19 +309,19 @@ router.delete('/articles/:id', checkLogin(true), async (req, res) => {
  *       500:
  *         description: 伺服器錯誤
  */
-router.get('/articles', checkLogin(true), async (req, res) => {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 5;
+router.get('/articles', async (req, res) => {
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.max(parseInt(req.query.limit, 10) || 5, 1);
     const offset = (page - 1) * limit;
+    let conn;
 
     try {
-        const conn = await pool.getConnection();
+        conn = await pool.getConnection();
         const [totalRows] = await conn.query('SELECT COUNT(*) AS total FROM articles');
         const [articles] = await conn.query(
             'SELECT * FROM articles ORDER BY createdAt ASC LIMIT ? OFFSET ?',
             [limit, offset]
         );
-        conn.release();
 
         res.json({
             total: totalRows[0].total,
@@ -336,7 +331,9 @@ router.get('/articles', checkLogin(true), async (req, res) => {
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
-    }
+    } finally {
+    if (conn) conn.release();
+  }
 });
 
 // 查詢文章
