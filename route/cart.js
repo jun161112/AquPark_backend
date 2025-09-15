@@ -11,16 +11,10 @@ const router = express.Router();
  * /cart:
  *   get:
  *     summary: 取得購物車列表
- *     description: 管理員可查看任何使用者的購物車，非管理員僅能查看自己的購物車。
+ *     description: 僅能查看自己的購物車內容。
  *     tags: [Cart]
  *     security:
  *       - groupHeader: []
- *     parameters:
- *       - in: query
- *         name: targetUserId
- *         schema:
- *           type: integer
- *         description: 僅管理員可指定查詢其他使用者的購物車
  *     responses:
  *       200:
  *         description: 成功取得購物車列表
@@ -50,8 +44,8 @@ const router = express.Router();
  *       500:
  *         description: 伺服器錯誤
  */
-router.get('/', checkLogin(false), authorizeOwnerOrAdmin({ source: 'query', key: 'targetUserId' }), async (req, res) => {
-    const userId = req.effectiveUserId;
+router.get('/', checkLogin(false), async (req, res) => {
+    const userId = req.userId;
 
     try {
         const conn = await pool.getConnection();
@@ -82,7 +76,7 @@ router.get('/', checkLogin(false), authorizeOwnerOrAdmin({ source: 'query', key:
  * /cart:
  *   post:
  *     summary: 新增購物車項目
- *     description: 管理員可替任何使用者新增；一般使用者只能新增到自己的購物車。若項目已存在，自動累加數量。
+ *     description: 只能新增到自己的購物車。若項目已存在則累加數量。
  *     tags: [Cart]
  *     security:
  *       - groupHeader: []
@@ -100,21 +94,18 @@ router.get('/', checkLogin(false), authorizeOwnerOrAdmin({ source: 'query', key:
  *                 type: integer
  *               qty:
  *                 type: integer
- *               targetUserId:
- *                 type: integer
- *                 description: 僅管理員可指定
  *     responses:
  *       201:
  *         description: 加入成功
  *       400:
- *         description: 欄位不完整或權限不足
+ *         description: 欄位不完整
  *       404:
  *         description: 商品不存在或未上架
  *       500:
  *         description: 伺服器錯誤
  */
-router.post('/', checkLogin(false), authorizeOwnerOrAdmin({ source: 'body', key: 'targetUserId' }), async (req, res) => {
-  const userId = req.effectiveUserId;
+router.post('/', checkLogin(false), async (req, res) => {
+  const userId = req.userId;
   const { productId, qty } = req.body;
 
   if (!productId || !qty) {
@@ -134,7 +125,7 @@ router.post('/', checkLogin(false), authorizeOwnerOrAdmin({ source: 'body', key:
       return res.status(404).json({ error: '商品不存在或未上架' });
     }
 
-    // 檢查是否已在購物車
+    // 檢查是否已在購物車，重覆則累加
     const [cartRows] = await conn.query(
       'SELECT id, qty FROM cart WHERE userId = ? AND productId = ?',
       [userId, productId]
@@ -165,7 +156,7 @@ router.post('/', checkLogin(false), authorizeOwnerOrAdmin({ source: 'body', key:
  *   patch:
  *     summary: 更新購物車項目數量或刪除
  *     description: |
- *       管理員可更新任意使用者的購物車；一般使用者僅能更新自己的。  
+ *       僅能更新自己的購物車。  
  *       qty < 0 回傳 400；qty = 0 等同刪除該品項。  
  *     tags: [Cart]
  *     security:
@@ -182,25 +173,22 @@ router.post('/', checkLogin(false), authorizeOwnerOrAdmin({ source: 'body', key:
  *             properties:
  *               productId:
  *                 type: integer
- *                 example: 3
+ *                 example: 13
  *               qty:
  *                 type: integer
  *                 example: 2
- *               targetUserId:
- *                 type: integer
- *                 description: 僅管理員可指定修改其他使用者
  *     responses:
  *       200:
- *         description: 更新成功，或 qty=0 時刪除成功
+ *         description: 更新/刪除成功
  *       400:
- *         description: 欄位錯誤（qty < 0）或權限不足
+ *         description: 欄位錯誤或 qty < 0
  *       404:
- *         description: 該使用者購物車中不存在此商品
+ *         description: 購物車中不存在此商品
  *       500:
  *         description: 伺服器錯誤
  */
-router.patch('/', checkLogin(false), authorizeOwnerOrAdmin({ source: 'body', key: 'targetUserId' }), async (req, res) => {
-    const userId = req.effectiveUserId;
+router.patch('/', checkLogin(false), async (req, res) => {
+    const userId = req.userId;
     const { productId, qty } = req.body;
 
     // 欄位檢查
@@ -254,7 +242,7 @@ router.patch('/', checkLogin(false), authorizeOwnerOrAdmin({ source: 'body', key
  * /cart/{productId}:
  *   delete:
  *     summary: 刪除購物車指定商品
- *     description: 管理員可刪除任何使用者的購物車商品；一般使用者僅能刪除自己的。
+ *     description: 僅能刪除自己購物車內的商品。
  *     tags: [Cart]
  *     security:
  *       - groupHeader: []
@@ -263,29 +251,22 @@ router.patch('/', checkLogin(false), authorizeOwnerOrAdmin({ source: 'body', key
  *         name: productId
  *         schema:
  *           type: integer
- *         required: true
  *         description: 要刪除的商品 ID
- *       - in: query
- *         name: targetUserId
- *         schema:
- *           type: integer
- *         description: 僅管理員可指定刪除其他人購物車
  *     responses:
  *       200:
  *         description: 刪除成功
- *       400:
- *         description: 權限不足
  *       404:
  *         description: 購物車中不存在此商品
  *       500:
  *         description: 伺服器錯誤
  */
-router.delete('/:productId', checkLogin(false), authorizeOwnerOrAdmin({ source: 'query', key: 'targetUserId' }), async (req, res) => {
-    const userId = req.effectiveUserId;
+router.delete('/:productId', checkLogin(false), async (req, res) => {
+    const userId = req.userId;
     const productId = Number(req.params.productId);
+    let conn;
 
     try {
-        const conn = await pool.getConnection();
+        conn = await pool.getConnection();
 
         // 確認存在
         const [rows] = await conn.query(
@@ -314,9 +295,7 @@ router.delete('/:productId', checkLogin(false), authorizeOwnerOrAdmin({ source: 
  * /cart/orders:
  *   post:
  *     summary: 結帳並建立訂單
- *     description: |
- *       使用者或管理員按下結帳後，必須在 body 中提供 userId 以指明目標購物車，同時
- *       驗證該 userId 與目前登入使用者是否相符。成功後自動清空該購物車。
+ *     description: 僅可對自己購物車結帳，成功後自動清空該購物車。
  *     tags: [Cart]
  *     security:
  *       - groupHeader: []
@@ -327,14 +306,10 @@ router.delete('/:productId', checkLogin(false), authorizeOwnerOrAdmin({ source: 
  *           schema:
  *             type: object
  *             required:
- *               - userId
  *               - consignee
  *               - tel
  *               - address
  *             properties:
- *               userId:
- *                 type: integer
- *                 description: 購物車所屬使用者 ID，必須與當前登入者相同
  *               consignee:
  *                 type: string
  *                 description: 收件人姓名
@@ -357,21 +332,19 @@ router.delete('/:productId', checkLogin(false), authorizeOwnerOrAdmin({ source: 
  *                   example: "訂單建立成功"
  *                 orderNumber:
  *                   type: string
- *                   example: "8450291736"
+ *                   example: "123456789"
  *       400:
- *         description: 欄位不完整、購物車為空或 userId 無效
- *       403:
- *         description: 操作使用者與目標 userId 不一致
+ *         description: 欄位不完整或購物車為空
  *       500:
  *         description: 伺服器錯誤
  */
-router.post('/orders', checkLogin(false), authorizeOwnerOrAdmin({ source: 'body', key: 'userId' }), async (req, res) => {
+router.post('/orders', checkLogin(false), async (req, res) => {
   // 從 middleware 拿到實際登入者 ID
-    const userId = req.effectiveUserId;
+    const userId = req.userId;
     const { consignee, tel, address } = req.body;
 
     if (!consignee || !tel || !address) {
-        return res.status(400).json({ error: '請提供 consignee、tel、address' });
+        return res.status(400).json({ error: '請提供 收件人姓名、電話、地址' });
     }
 
     let conn;
@@ -393,14 +366,14 @@ router.post('/orders', checkLogin(false), authorizeOwnerOrAdmin({ source: 'body'
             return res.status(400).json({ error: '購物車為空，無法結帳' });
         }
 
-        // 隨機生成 10 位訂單編號
+        // 隨機生成 9 位訂單編號
         let orderNumber = '';
-        for (let i = 0; i < 10; i++) {
+        for (let i = 0; i < 9; i++) {
             orderNumber += Math.floor(Math.random() * 10);
         }
         const status = '已付款';
 
-        // 插入訂單主檔
+        // 建立訂單主檔
         await conn.query(
             `INSERT INTO orderCustomers
                 (orderNumber, checkTime, userId, consignee, tel, address, status)
@@ -429,9 +402,7 @@ router.post('/orders', checkLogin(false), authorizeOwnerOrAdmin({ source: 'body'
         }
         res.status(500).json({ error: err.message });
     } finally {
-        if (conn) {
-            conn.release();
-        }
+        if (conn) { conn.release(); }
     }
 });
 
