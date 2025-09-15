@@ -239,54 +239,33 @@ router.patch('/', checkLogin(false), async (req, res) => {
 // 刪除購物車項目
 /**
  * @openapi
- * /cart/{productId}:
+ * /cart:
  *   delete:
- *     summary: 刪除購物車指定商品
- *     description: 僅能刪除自己購物車內的商品。
+ *     summary: 清空購物車
+ *     description: 僅可清空自己的購物車，會刪除所有項目
  *     tags: [Cart]
  *     security:
  *       - groupHeader: []
- *     parameters:
- *       - in: path
- *         name: productId
- *         schema:
- *           type: integer
- *         description: 要刪除的商品 ID
  *     responses:
  *       200:
- *         description: 刪除成功
- *       404:
- *         description: 購物車中不存在此商品
+ *         description: 購物車已清空
  *       500:
  *         description: 伺服器錯誤
  */
-router.delete('/:productId', checkLogin(false), async (req, res) => {
+router.delete('/', checkLogin(false), async (req, res) => {
     const userId = req.userId;
-    const productId = Number(req.params.productId);
     let conn;
 
     try {
         conn = await pool.getConnection();
-
-        // 確認存在
-        const [rows] = await conn.query(
-            'SELECT id FROM cart WHERE userId = ? AND productId = ?',
-            [userId, productId]
-        );
-        if (rows.length === 0) {
-            conn.release();
-            return res.status(404).json({ error: '購物車中不存在此商品' });
-        }
-
         await conn.query(
-            'DELETE FROM cart WHERE userId = ? AND productId = ?',
-            [userId, productId]
+            'DELETE FROM cart WHERE userId = ?',
+            [userId]
         );
-        conn.release();
-        res.json({ message: '商品已從購物車刪除' });
+        res.json({ message: '購物車已清空' });
     } catch (err) {
         res.status(500).json({ error: err.message });
-    }
+    } finally { if (conn) conn.release(); }
 });
 
 // 建立訂單並清空購物車
