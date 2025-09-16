@@ -194,6 +194,60 @@ router.post('/register', async (req, res) => {
     }
 });
 
+// 驗證 Email 是否已被使用
+/**
+ * @openapi
+ * /users/checkEmail:
+ *   get:
+ *     summary: 驗證 Email 是否已註冊
+ *     description: 確認前端輸入的 Email 是否已在系統中註冊過
+ *     tags: [Users - 會員管理]
+ *     parameters:
+ *       - in: query
+ *         name: email
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: email
+ *         description: 欲驗證的 Email
+ *     responses:
+ *       200:
+ *         description: 回傳 Email 是否已被使用
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 exists:
+ *                   type: boolean
+ *                   example: false
+ *       400:
+ *         description: 缺少或格式錯誤的 email
+ *       500:
+ *         description: 伺服器錯誤
+ */
+router.get('/checkEmail', async (req, res) => {
+  const email = req.query.email;
+  if (typeof email !== 'string' || !email.includes('@')) {
+    return res.status(400).json({ error: '請提供有效的 Email'});
+  }
+
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    const [rows] = await conn.query(
+      'SELECT 1 FROM users WHERE email = ? LIMIT 1',
+      [email]
+    );
+    // exists: 有紀錄 = true; 沒紀錄 = false
+    res.json({ exists: rows.length > 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (conn) conn.release();
+  }
+});
+
 // 修改會員資料
 /**
  * @openapi
