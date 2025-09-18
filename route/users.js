@@ -335,47 +335,182 @@ router.patch('/profile', checkLogin(false), authorizeOwnerOrAdmin({ source: 'bod
 // 取得使用者
 /**
  * @openapi
- * /users/{userId}:
+ * /users:
  *   get:
- *     summary: 查詢使用者
- *     description: 
- *       非管理員使用者僅能查看自己的資料；  
- *       管理員可指定任何 userId。
+ *     summary: 取得使用者資料
+ *     description: |
+ *       - 一般會員只能取得自己的帳號資訊  
+ *       - 管理員可搜尋所有使用者，並自訂 page 和 limit 分頁  
  *     tags: [Users - 會員管理]
  *     security:
  *       - groupHeader: []
  *     parameters:
- *       - in: path
- *         name: userId
- *         required: true
+ *       - in: query
+ *         name: id
  *         schema:
  *           type: integer
- *         description: 欲查詢的使用者 ID
+ *         description: 管理員可依 id 精確搜尋
+ *       - in: query
+ *         name: userName
+ *         schema:
+ *           type: string
+ *         description: 管理員可依 userName 做模糊搜尋
+ *       - in: query
+ *         name: email
+ *         schema:
+ *           type: string
+ *           format: email
+ *         description: 管理員可依 email 做模糊搜尋
+ *       - in: query
+ *         name: tel
+ *         schema:
+ *           type: string
+ *         description: 管理員可依 tel 做模糊搜尋
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *         description: 管理員分頁的頁碼（從 1 開始）
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 10
+ *         description: 管理員分頁時每頁顯示筆數
  *     responses:
  *       200:
- *         description: 成功回傳單一使用者資訊
+ *         description: 會員資料或分頁使用者列表
+ *         content:
+ *           application/json:
+ *             schema:
+ *               oneOf:
+ *                 - type: object
+ *                   properties:
+ *                     id:
+ *                       type: integer
+ *                     admin:
+ *                       type: integer
+ *                     userName:
+ *                       type: string
+ *                     email:
+ *                       type: string
+ *                       format: email
+ *                     tel:
+ *                       type: string
+ *                     editTime:
+ *                       type: string
+ *                       format: date-time
+ *                 - type: object
+ *                   properties:
+ *                     total:
+ *                       type: integer
+ *                     page:
+ *                       type: integer
+ *                     limit:
+ *                       type: integer
+ *                     users:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           id:
+ *                             type: integer
+ *                           admin:
+ *                             type: integer
+ *                           userName:
+ *                             type: string
+ *                           email:
+ *                             type: string
+ *                             format: email
+ *                           tel:
+ *                             type: string
+ *                           editTime:
+ *                             type: string
+ *                             format: date-time
  *       403:
  *         description: 權限不足
- *       404:
- *         description: 找不到該使用者
  *       500:
  *         description: 伺服器錯誤
  */
-router.get('/:userId', checkLogin(false), authorizeOwnerOrAdmin({ source: 'params', key: 'userId' }), async (req, res) => {
-    const userId = req.effectiveUserId;
+router.get('/', checkLogin(false), async (req, res) => {
+    const currentUserId = req.userId;
+    const isAdmin       = req.isAdmin;
+    let conn;
 
     try {
-        const conn = await pool.getConnection();
-        const [rows] = await conn.query('SELECT id, admin, userName, email, tel, editTime FROM users WHERE id = ?', [userId]);
-        conn.release();
+      conn = await pool.getConnection();
 
-      if (rows.length === 0) {
-        return res.status(404).json({ error: '找不到該使用者' });
+      // 非管理員：只拿自己的資料
+      if (!isAdmin) {
+        const [rows] = await conn.query(
+          'SELECT id, admin, userName, email, tel, editTime FROM users WHERE id = ?',
+          [currentUserId]
+        );
+        if (rows.length === 0) {
+          return res.status(404).json({ error: '找不到該使用者' });
+        }
+        return res.json(rows[0]);
       }
-        res.json(rows);
+
+      // 管理員：可模糊搜尋並分頁
+      const { id, userName, email, tel } = req.query;
+      const page  = Math.max(parseInt(req.query.page, 10)  || 1,  1);
+      const limit = Math.max(parseInt(req.query.limit, 10) || 10, 1);
+      const offset = (page - 1) * limit;
+
+      const conds = [];
+      const params = [];
+
+      if (id) {
+        conds.push('id = ?');
+        params.push(Number(id));
+      } if (userName) {
+        conds.push('userName LIKE ?');
+        params.push(`%${userName}%`);
+      } if (email) {
+        conds.push('email LIKE ?');
+        params.push(`%${email}%`);
+      } if (tel) {
+        conds.push('tel LIKE ?');
+        params.push(`%${tel}%`);
+      }
+      const whereClause = conds.length
+        ? 'WHERE ' + conds.join(' AND ')
+        : '';
+
+      // 取得總筆數
+      const [countRows] = await conn.query(
+        `SELECT COUNT(*) AS total FROM users ${whereClause}`,
+        params
+      );
+      const total = countRows[0].total;
+
+      // 若無搜尋結果，回傳查無資料
+      if (total === 0) {
+        return res.status(404).json({ error: '查無資料' });
+      }
+
+      // 取得分頁資料
+      const [users] = await conn.query(
+        `SELECT id, admin, userName, email, tel, editTime
+         FROM users
+         ${whereClause}
+         ORDER BY id ASC
+         LIMIT ? OFFSET ?`,
+        [...params, limit, offset]
+      );
+
+      return res.json({ total, page, limit, users });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+      return res.status(500).json({ error: err.message });
+    } finally {
+      if (conn) conn.release();
     }
-});
+  }
+);
+
+module.exports = router;
+
 
 module.exports = router;
