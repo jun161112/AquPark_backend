@@ -241,7 +241,7 @@ router.delete('/articles/:id', checkLogin(true), async (req, res) => {
     }
 });
 
-// 取得文章列表
+// 取得文章列表(顯示文章)
 /**
  * @openapi
  * /admin/articles:
@@ -336,7 +336,7 @@ router.get('/articles', async (req, res) => {
   }
 });
 
-// 查詢文章
+// 查詢文章(搜尋文章)
 /**
  * @openapi
  * /admin/articles/{id}:
@@ -929,13 +929,16 @@ router.get('/products/search', checkLogin(true), async (req, res) => {
 });
 
 
-// 新增訂單 < 測試用(也可直接上機)
+// 新增訂單
 /**
  * @openapi
  * /admin/orders:
  *   post:
- *     summary: 新增訂單（測試用）
- *     description: 新增訂單資料與商品細項。僅管理員可操作。
+ *     summary: 新增訂單
+ *     description: |
+ *       新增訂單資料與商品細項，僅管理員可操作。  
+ *       訂單編號自動產生，不須手動輸入。  
+ *       一般用戶要新增請使用 [Cart - 購物車] /cart/orders
  *     tags: [Admin - 訂單管理]
  *     security:
  *       - groupHeader: []
@@ -946,7 +949,6 @@ router.get('/products/search', checkLogin(true), async (req, res) => {
  *           schema:
  *             type: object
  *             required:
- *               - orderNumber
  *               - userId
  *               - consignee
  *               - tel
@@ -954,9 +956,6 @@ router.get('/products/search', checkLogin(true), async (req, res) => {
  *               - status
  *               - products
  *             properties:
- *               orderNumber:
- *                 type: string
- *                 example: "AQ20250620001"
  *               userId:
  *                 type: integer
  *                 example: 3
@@ -996,15 +995,69 @@ router.get('/products/search', checkLogin(true), async (req, res) => {
  *                       example: 2
  *     responses:
  *       201:
- *         description: 訂單新增成功
+ *         description: 訂單新增成功，並回傳訂單內容
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "訂單新增成功"
+ *                 order:
+ *                   type: object
+ *                   properties:
+ *                     orderNumber:
+ *                       type: string
+ *                       example: "123456789"
+ *                     userId:
+ *                       type: integer
+ *                       example: 3
+ *                     consignee:
+ *                       type: string
+ *                       example: "王小明"
+ *                     tel:
+ *                       type: string
+ *                       example: "0912345678"
+ *                     address:
+ *                       type: string
+ *                       example: "台北市信義區101號"
+ *                     status:
+ *                       type: string
+ *                       example: "已付款"
+ *                     products:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           productId:
+ *                             type: integer
+ *                             example: 101
+ *                           productName:
+ *                             type: string
+ *                             example: "鯊魚玩偶"
+ *                           salePrice:
+ *                             type: number
+ *                             example: 499
+ *                           qty:
+ *                             type: integer
+ *                             example: 2
  *       500:
  *         description: 伺服器錯誤
  */
 router.post('/orders', checkLogin(true), async (req, res) => {
-    const { orderNumber, userId, consignee, tel, address, status, products } = req.body;
+    const { userId, consignee, tel, address, status, products } = req.body;
 
+    // 自動生成 9 碼訂單編號
+    let orderNumber = '';
+    for (let i = 0; i < 9; i++) {
+        orderNumber += Math.floor(Math.random() * 10);
+    }
+
+    let conn;
     try {
-        const conn = await pool.getConnection();
+        conn = await pool.getConnection();
+        await conn.beginTransaction();
 
         // 新增訂單基本資料到 orderCustomers 表
         await conn.query(
@@ -1014,8 +1067,7 @@ router.post('/orders', checkLogin(true), async (req, res) => {
         );
 
         // 新增商品明細到 orderInfor 表
-        for (const product of products) {
-            const { productId, productName, salePrice, qty } = product;
+        for (const { productId, productName, salePrice, qty } of products) {
             await conn.query(
                 `INSERT INTO orderInfor (orderNumber, productId, productName, salePrice, qty) 
                  VALUES (?, ?, ?, ?, ?)`,
@@ -1023,10 +1075,25 @@ router.post('/orders', checkLogin(true), async (req, res) => {
             );
         }
 
-        conn.release();
-        res.status(201).json({ message: '訂單新增成功' });
+        await conn.commit();
+        
+        res.status(201).json({
+            message: '訂單新增成功',
+            order: {
+            orderNumber,
+            userId,
+            consignee,
+            tel,
+            address,
+            status,
+            products
+            }
+        });
     } catch (err) {
+        if (conn) await conn.rollback();
         res.status(500).json({ error: err.message });
+    } finally {
+        if (conn) conn.release();
     }
 });
 

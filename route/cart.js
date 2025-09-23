@@ -374,7 +374,18 @@ router.post('/orders', checkLogin(false), async (req, res) => {
         await conn.query(`DELETE FROM cart WHERE userId = ?`, [userId]);
 
         await conn.commit();
-        res.status(201).json({ message: '訂單建立成功', orderNumber });
+        res.status(201).json({
+            message: '訂單建立成功',
+            order: {
+                orderNumber,
+                userId,
+                consignee,
+                tel,
+                address,
+                status,
+                products: cartItems
+            }
+        });
     } catch (err) {
         if (conn) {
             await conn.rollback();
