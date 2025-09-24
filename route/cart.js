@@ -11,7 +11,7 @@ const router = express.Router();
  * /cart:
  *   get:
  *     summary: 取得購物車列表
- *     description: 僅能查看自己的購物車內容。
+ *     description: 只回傳當前登入使用者的購物車內容。
  *     tags: [Cart]
  *     security:
  *       - groupHeader: []
@@ -46,9 +46,10 @@ const router = express.Router();
  */
 router.get('/', checkLogin(false), async (req, res) => {
     const userId = req.userId;
+  let conn;
 
     try {
-        const conn = await pool.getConnection();
+        conn = await pool.getConnection();
         const [rows] = await conn.query(
         `SELECT
             c.id AS cartId,
@@ -63,11 +64,12 @@ router.get('/', checkLogin(false), async (req, res) => {
         WHERE c.userId = ?`,
         [userId]
         );
-        conn.release();
         res.json(rows);
     } catch (err) {
     res.status(500).json({ error: err.message });
-    }
+    } finally {
+    if (conn) conn.release();
+  }
 });
 
 // 新增至購物車
@@ -76,8 +78,12 @@ router.get('/', checkLogin(false), async (req, res) => {
  * /cart:
  *   post:
  *     summary: 新增購物車項目
- *     description: 只能新增到自己的購物車。若項目已存在則累加數量。
- *     tags: [Cart]
+ *     description: |
+ *       只能新增到自己的購物車。  
+ *       若項目已存在則累加數量。  
+ *       回傳加入或更新後的項目內容。
+ *     tags:
+ *       - Cart
  *     security:
  *       - groupHeader: []
  *     requestBody:
@@ -96,36 +102,55 @@ router.get('/', checkLogin(false), async (req, res) => {
  *                 type: integer
  *     responses:
  *       201:
- *         description: 加入成功
+ *         description: 加入/更新購物車成功，並回傳該項目內容
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "已加入購物車"
+ *                 item:
+ *                   type: object
+ *                   properties:
+ *                     productId:
+ *                       type: integer
+ *                     productName:
+ *                       type: string
+ *                     salePrice:
+ *                       type: number
+ *                     qty:
+ *                       type: integer
  *       400:
- *         description: 欄位不完整
+ *         description: 欄位不完整或型別錯誤
  *       404:
  *         description: 商品不存在或未上架
  *       500:
  *         description: 伺服器錯誤
  */
 router.post('/', checkLogin(false), async (req, res) => {
-  const userId = req.userId;
+  const userId    = req.userId;
   const { productId, qty } = req.body;
 
-  if (!productId || !qty) {
-    return res.status(400).json({ error: '請提供 productId 與 qty' });
+  if (typeof productId !== 'number' || typeof qty !== 'number') {
+    return res.status(400).json({ error: '請提供 productId 與數字型別 qty' });
   }
 
+  let conn;
   try {
-    const conn = await pool.getConnection();
+    conn = await pool.getConnection();
 
-    // 確認商品存在且已上架
-    const [prd] = await conn.query(
-      'SELECT id FROM products WHERE id = ? AND sell = 1',
+    // 1. 確認商品存在且已上架，同時取 title & salePrice
+    const [prdRows] = await conn.query(
+      'SELECT title AS productName, salePrice FROM products WHERE id = ? AND sell = 1',
       [productId]
     );
-    if (prd.length === 0) {
-      conn.release();
+    if (prdRows.length === 0) {
       return res.status(404).json({ error: '商品不存在或未上架' });
     }
 
-    // 檢查是否已在購物車，重覆則累加
+    // 2. 檢查是否已在購物車
     const [cartRows] = await conn.query(
       'SELECT id, qty FROM cart WHERE userId = ? AND productId = ?',
       [userId, productId]
@@ -142,10 +167,24 @@ router.post('/', checkLogin(false), async (req, res) => {
       );
     }
 
-    conn.release();
-    res.status(201).json({ message: '已加入購物車' });
+    // 取得更新後的購物車內容
+    const [cart] = await conn.query(
+      `SELECT c.productId,
+              p.title       AS productName,
+              p.salePrice,
+              c.qty
+       FROM cart c
+       JOIN products p
+         ON c.productId = p.id
+       WHERE c.userId = ?`,
+      [userId]
+    );
+
+    res.status(201).json({ message: '已加入購物車', cart });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  } finally {
+    if (conn) conn.release();
   }
 });
 
@@ -158,7 +197,9 @@ router.post('/', checkLogin(false), async (req, res) => {
  *     description: |
  *       僅能更新自己的購物車。  
  *       qty < 0 回傳 400；qty = 0 等同刪除該品項。  
- *     tags: [Cart]
+ *       完成後回傳目前購物車所有項目。
+ *     tags:
+ *       - Cart
  *     security:
  *       - groupHeader: []
  *     requestBody:
@@ -173,13 +214,32 @@ router.post('/', checkLogin(false), async (req, res) => {
  *             properties:
  *               productId:
  *                 type: integer
- *                 example: 13
  *               qty:
  *                 type: integer
- *                 example: 2
  *     responses:
  *       200:
- *         description: 更新/刪除成功
+ *         description: 更新/刪除成功，並回傳目前購物車內容
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "購物車數量已更新"
+ *                 cart:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       productId:
+ *                         type: integer
+ *                       productName:
+ *                         type: string
+ *                       salePrice:
+ *                         type: number
+ *                       qty:
+ *                         type: integer
  *       400:
  *         description: 欄位錯誤或 qty < 0
  *       404:
@@ -188,52 +248,65 @@ router.post('/', checkLogin(false), async (req, res) => {
  *         description: 伺服器錯誤
  */
 router.patch('/', checkLogin(false), async (req, res) => {
-    const userId = req.userId;
-    const { productId, qty } = req.body;
+  const userId      = req.userId;
+  const { productId, qty } = req.body;
 
-    // 欄位檢查
-    if (typeof productId !== 'number' || typeof qty !== 'number') {
-        return res.status(400).json({ error: '請提供 productId 與數字型別 qty' });
+  if (typeof productId !== 'number' || typeof qty !== 'number') {
+    return res.status(400).json({ error: '請提供 productId 與數字型別 qty' });
+  }
+  if (qty < 0) {
+    return res.status(400).json({ error: 'qty 不能小於 0' });
+  }
+
+  let conn;
+  try {
+    conn = await pool.getConnection();
+
+    // 確認此商品在購物車中
+    const [rows] = await conn.query(
+      'SELECT id FROM cart WHERE userId = ? AND productId = ?',
+      [userId, productId]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ error: '購物車中不存在此商品' });
     }
 
-    // 數量驗證
-    if (qty < 0) {
-        return res.status(400).json({ error: 'qty 不能小於 0' });
+    if (qty === 0) {
+      // 刪除此項目
+      await conn.query(
+        'DELETE FROM cart WHERE userId = ? AND productId = ?',
+        [userId, productId]
+      );
+    } else {
+      // 更新數量
+      await conn.query(
+        'UPDATE cart SET qty = ? WHERE userId = ? AND productId = ?',
+        [qty, userId, productId]
+      );
     }
 
-    try {
-        const conn = await pool.getConnection();
+    // 取得更新後的購物車內容
+    const [cart] = await conn.query(
+      `SELECT c.productId,
+              p.title       AS productName,
+              p.salePrice,
+              c.qty
+       FROM cart c
+       JOIN products p
+         ON c.productId = p.id
+       WHERE c.userId = ?`,
+      [userId]
+    );
 
-        // 確認該使用者的購物車中有此商品
-        const [rows] = await conn.query(
-            'SELECT qty FROM cart WHERE userId = ? AND productId = ?',
-            [userId, productId]
-        );
-        if (rows.length === 0) {
-            conn.release();
-            return res.status(404).json({ error: '購物車中不存在此商品' });
-        }
-
-        if (qty === 0) {
-            // qty=0 當作刪除
-            await conn.query(
-                'DELETE FROM cart WHERE userId = ? AND productId = ?',
-                [userId, productId]
-            );
-            conn.release();
-            return res.json({ message: '商品已從購物車移除' });
-        }
-
-        // qty > 0 更新數量
-        await conn.query(
-            'UPDATE cart SET qty = ? WHERE userId = ? AND productId = ?',
-            [qty, userId, productId]
-        );
-        conn.release();
-        res.json({ message: '購物車數量已更新' });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+    res.json({
+      message: qty === 0 ? '商品已從購物車移除' : '購物車數量已更新',
+      cart
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (conn) conn.release();
+  }
 });
 
 // 刪除購物車項目
@@ -242,30 +315,41 @@ router.patch('/', checkLogin(false), async (req, res) => {
  * /cart:
  *   delete:
  *     summary: 清空購物車
- *     description: 僅可清空自己的購物車，會刪除所有項目
- *     tags: [Cart]
+ *     description: 僅可清空自己的購物車，會刪除所有項目。
+ *     tags:
+ *       - Cart
  *     security:
  *       - groupHeader: []
  *     responses:
- *       200:
+ *       201:
  *         description: 購物車已清空
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "購物車已清空"
  *       500:
  *         description: 伺服器錯誤
  */
 router.delete('/', checkLogin(false), async (req, res) => {
-    const userId = req.userId;
-    let conn;
+  const userId = req.userId;
+  let conn;
 
-    try {
-        conn = await pool.getConnection();
-        await conn.query(
-            'DELETE FROM cart WHERE userId = ?',
-            [userId]
-        );
-        res.json({ message: '購物車已清空' });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    } finally { if (conn) conn.release(); }
+  try {
+    conn = await pool.getConnection();
+    await conn.query(
+      'DELETE FROM cart WHERE userId = ?',
+      [userId]
+    );
+    res.status(201).json({ message: '購物車已清空' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (conn) conn.release();
+  }
 });
 
 // 建立訂單並清空購物車
@@ -274,7 +358,9 @@ router.delete('/', checkLogin(false), async (req, res) => {
  * /cart/orders:
  *   post:
  *     summary: 結帳並建立訂單
- *     description: 僅可對自己購物車結帳，成功後自動清空該購物車。
+ *     description: |
+ *       結帳後自動生成 9 碼訂單編號。
+ *       成功後建立訂單主檔與明細，並清空購物車，回傳整張訂單內容。
  *     tags: [Cart]
  *     security:
  *       - groupHeader: []
@@ -292,12 +378,15 @@ router.delete('/', checkLogin(false), async (req, res) => {
  *               consignee:
  *                 type: string
  *                 description: 收件人姓名
+ *                 example: "王小明"
  *               tel:
  *                 type: string
  *                 description: 收件人電話
+ *                 example: "0912345678"
  *               address:
  *                 type: string
  *                 description: 收件地址
+ *                 example: "台北市信義區101號"
  *     responses:
  *       201:
  *         description: 訂單建立成功，並已清空購物車
@@ -309,9 +398,44 @@ router.delete('/', checkLogin(false), async (req, res) => {
  *                 message:
  *                   type: string
  *                   example: "訂單建立成功"
- *                 orderNumber:
- *                   type: string
- *                   example: "123456789"
+ *                 order:
+ *                   type: object
+ *                   properties:
+ *                     orderNumber:
+ *                       type: string
+ *                       example: "123456789"
+ *                     userId:
+ *                       type: integer
+ *                       example: 5
+ *                     consignee:
+ *                       type: string
+ *                       example: "王小明"
+ *                     tel:
+ *                       type: string
+ *                       example: "0912345678"
+ *                     address:
+ *                       type: string
+ *                       example: "台北市信義區101號"
+ *                     status:
+ *                       type: string
+ *                       example: "已付款"
+ *                     products:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           productId:
+ *                             type: integer
+ *                             example: 101
+ *                           productName:
+ *                             type: string
+ *                             example: "鯊魚玩偶"
+ *                           salePrice:
+ *                             type: number
+ *                             example: 499
+ *                           qty:
+ *                             type: integer
+ *                             example: 2
  *       400:
  *         description: 欄位不完整或購物車為空
  *       500:
