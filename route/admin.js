@@ -1097,6 +1097,147 @@ router.post('/orders', checkLogin(true), async (req, res) => {
     }
 });
 
+/**
+ * @openapi
+ * /admin/orders:
+ *   get:
+ *     summary: 查看使用者所有訂單
+ *     description: |
+ *       - 一般會員只會看到自己的所有訂單  
+ *       - 管理員可透過 query 參數指定 userId 來查看該使用者的所有訂單  
+ *     tags: [Admin - 訂單管理]
+ *     security:
+ *       - groupHeader: []
+ *     parameters:
+ *       - in: query
+ *         name: userId
+ *         schema:
+ *           type: integer
+ *         description: 管理員可指定要查詢的使用者 ID；一般會員此參數無效
+ *     responses:
+ *       200:
+ *         description: 成功回傳訂單列表
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   orderNumber:
+ *                     type: string
+ *                     example: "123456789"
+ *                   checkTime:
+ *                     type: string
+ *                     format: date-time
+ *                   consignee:
+ *                     type: string
+ *                     example: "王小明"
+ *                   tel:
+ *                     type: string
+ *                     example: "0912345678"
+ *                   address:
+ *                     type: string
+ *                     example: "台北市信義區101號"
+ *                   status:
+ *                     type: string
+ *                     example: "已付款"
+ *                   items:
+ *                     type: array
+ *                     items:
+ *                       type: object
+ *                       properties:
+ *                         productName:
+ *                           type: string
+ *                           example: "鯊魚玩偶"
+ *                         salePrice:
+ *                           type: number
+ *                           example: 499
+ *                         qty:
+ *                           type: integer
+ *                           example: 2
+ *                         productSubtotal:
+ *                           type: number
+ *                           example: 998
+ *                   totalAmount:
+ *                     type: number
+ *                     example: 998
+ *       403:
+ *         description: 權限不足
+ *       404:
+ *         description: 該使用者無任何訂單
+ *       500:
+ *         description: 伺服器錯誤
+ */
+router.get('/orders', checkLogin(false), async (req, res) => {
+  const currentUserId = req.userId;
+  const isAdmin       = req.isAdmin;
+  const queryUserId   = Number(req.query.userId);
+  const targetUserId  = isAdmin && queryUserId ? queryUserId : currentUserId;
+  let conn;
+
+  try {
+    conn = await pool.getConnection();
+
+    // 撈訂單與明細
+    const [rows] = await conn.query(
+      `SELECT
+         oc.orderNumber,
+         oc.checkTime,
+         oc.consignee,
+         oc.tel,
+         oc.address,
+         oc.status,
+         oi.productName,
+         oi.salePrice,
+         oi.qty,
+         (oi.salePrice * oi.qty) AS productSubtotal
+       FROM orderCustomers AS oc
+       JOIN orderInfor    AS oi
+         ON oc.orderNumber = oi.orderNumber
+       WHERE oc.userId = ?
+       ORDER BY oc.checkTime DESC`,
+      [targetUserId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: '該使用者無任何訂單' });
+    }
+
+    // 聚合同一張訂單的 items
+    const ordersMap = {};
+    rows.forEach(r => {
+      if (!ordersMap[r.orderNumber]) {
+        ordersMap[r.orderNumber] = {
+          orderNumber:  r.orderNumber,
+          checkTime:    r.checkTime,
+          consignee:    r.consignee,
+          tel:          r.tel,
+          address:      r.address,
+          status:       r.status,
+          items:        [],
+          totalAmount:  0
+        };
+      }
+      ordersMap[r.orderNumber].items.push({
+        productName:     r.productName,
+        salePrice:       r.salePrice,
+        qty:             r.qty,
+        productSubtotal: r.productSubtotal
+      });
+      ordersMap[r.orderNumber].totalAmount += r.productSubtotal;
+    });
+
+    const orders = Object.values(ordersMap);
+    res.json(orders);
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (conn) conn.release();
+  }
+});
+
 // 查看訂單資訊(單筆)
 /**
  * @openapi
