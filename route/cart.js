@@ -309,7 +309,7 @@ router.patch('/', checkLogin(false), async (req, res) => {
   }
 });
 
-// 刪除購物車項目
+// 刪除整個購物車
 /**
  * @openapi
  * /cart:
@@ -436,6 +436,10 @@ router.delete('/', checkLogin(false), async (req, res) => {
  *                           qty:
  *                             type: integer
  *                             example: 2
+ *                           imgUrls:
+ *                             type: string
+ *                             description: "圖片網址"
+ *                             example: "/uploads/products/img_5g6wrd.png"
  *       400:
  *         description: 欄位不完整或購物車為空
  *       500:
@@ -443,81 +447,96 @@ router.delete('/', checkLogin(false), async (req, res) => {
  */
 router.post('/orders', checkLogin(false), async (req, res) => {
   // 從 middleware 拿到實際登入者 ID
-    const userId = req.userId;
-    const { consignee, tel, address } = req.body;
+  const userId = req.userId;
+  const { consignee, tel, address } = req.body;
 
-    if (!consignee || !tel || !address) {
-        return res.status(400).json({ error: '請提供 收件人姓名、電話、地址' });
+  if (!consignee || !tel || !address) {
+    return res.status(400).json({ error: '請提供 收件人姓名、電話、地址' });
+  }
+
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+
+    // 取出該 userId 的購物車所有項目
+    const [cartItems] = await conn.query(
+      `SELECT 
+        c.productId, p.title AS productName, p.salePrice, c.qty, CAST(p.imgUrls AS CHAR) AS imgUrls
+      FROM cart c
+      JOIN products p ON c.productId = p.id
+      WHERE c.userId = ?`,
+      [userId]
+    );
+    if (cartItems.length === 0) {
+      await conn.rollback();
+      return res.status(400).json({ error: '購物車為空，無法結帳' });
     }
 
-    let conn;
-    try {
-        conn = await pool.getConnection();
-        await conn.beginTransaction();
-
-        // 取出該 userId 的購物車所有項目
-        const [cartItems] = await conn.query(
-            `SELECT 
-                c.productId, p.title AS productName, p.salePrice, c.qty
-            FROM cart c
-            JOIN products p ON c.productId = p.id
-            WHERE c.userId = ?`,
-            [userId]
-        );
-        if (cartItems.length === 0) {
-            await conn.rollback();
-            return res.status(400).json({ error: '購物車為空，無法結帳' });
-        }
-
-        // 隨機生成 9 位訂單編號
-        let orderNumber = '';
-        for (let i = 0; i < 9; i++) {
-            orderNumber += Math.floor(Math.random() * 10);
-        }
-        const status = '已付款';
-
-        // 建立訂單主檔
-        await conn.query(
-            `INSERT INTO orderCustomers
-                (orderNumber, checkTime, userId, consignee, tel, address, status)
-            VALUES (?, NOW(), ?, ?, ?, ?, ?)`,
-            [orderNumber, userId, consignee, tel, address, status]
-        );
-
-        // 插入每筆訂單明細
-        for (const item of cartItems) {
-        await conn.query(
-            `INSERT INTO orderInfor
-            (orderNumber, productId, productName, salePrice, qty)
-            VALUES (?, ?, ?, ?, ?)`,
-            [orderNumber, item.productId, item.productName, item.salePrice, item.qty]
-        );
-        }
-
-        // 清空購物車
-        await conn.query(`DELETE FROM cart WHERE userId = ?`, [userId]);
-
-        await conn.commit();
-        res.status(201).json({
-            message: '訂單建立成功',
-            order: {
-                orderNumber,
-                userId,
-                consignee,
-                tel,
-                address,
-                status,
-                products: cartItems
-            }
-        });
-    } catch (err) {
-        if (conn) {
-            await conn.rollback();
-        }
-        res.status(500).json({ error: err.message });
-    } finally {
-        if (conn) { conn.release(); }
+    // 隨機生成 9 位訂單編號
+    let orderNumber = '';
+    for (let i = 0; i < 9; i++) {
+      orderNumber += Math.floor(Math.random() * 10);
     }
+    const status = '已付款';
+
+    // 建立訂單主檔
+    await conn.query(
+      `INSERT INTO orderCustomers
+        (orderNumber, checkTime, userId, consignee, tel, address, status)
+      VALUES (?, NOW(), ?, ?, ?, ?, ?)`,
+      [orderNumber, userId, consignee, tel, address, status]
+    );
+
+    // 插入每筆訂單明細
+    const rows = cartItems.map(ci => [
+      orderNumber,
+      ci.productId,
+      ci.productName,
+      ci.salePrice,
+      ci.qty,
+      ci.imgUrls || ''
+    ]);
+    await conn.query(
+      `INSERT INTO orderInfor
+        (orderNumber, productId, productName, salePrice, qty, imgUrls)
+      VALUES ?`,
+      [rows]
+    );
+
+    // 清空購物車
+    await conn.query(`DELETE FROM cart WHERE userId = ?`, [userId]);
+
+    await conn.commit();
+
+    const returnedProducts = cartItems.map(ci => ({
+      productId: ci.productId,
+      productName: ci.productName,
+      salePrice: ci.salePrice,
+      qty: ci.qty,
+      imgUrls: ci.imgUrls || ''
+    }));
+  
+    res.status(201).json({
+      message: '訂單建立成功',
+      order: {
+        orderNumber,
+        userId,
+        consignee,
+        tel,
+        address,
+        status,
+        products: returnedProducts
+      }
+    });
+  } catch (err) {
+    if (conn) {
+      await conn.rollback();
+    }
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (conn) { conn.release(); }
+  }
 });
 
 module.exports = router;

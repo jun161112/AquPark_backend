@@ -1042,61 +1042,100 @@ router.get('/products/search', checkLogin(true), async (req, res) => {
  *                           qty:
  *                             type: integer
  *                             example: 2
+ *                           imgUrls:
+ *                             type: string
+ *                             example: "/uploads/products/img_5g6wrd.png"
  *       500:
  *         description: 伺服器錯誤
  */
 router.post('/orders', checkLogin(true), async (req, res) => {
-    const { userId, consignee, tel, address, status, products } = req.body;
+  const { userId, consignee, tel, address, status, products } = req.body;
 
-    // 自動生成 9 碼訂單編號
-    let orderNumber = '';
-    for (let i = 0; i < 9; i++) {
-        orderNumber += Math.floor(Math.random() * 10);
+  // 自動生成 9 碼訂單編號
+  let orderNumber = '';
+  for (let i = 0; i < 9; i++) {
+      orderNumber += Math.floor(Math.random() * 10);
+  }
+
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+
+    // 新增訂單基本資料到 orderCustomers 表
+    await conn.query(
+      `INSERT INTO orderCustomers (orderNumber, checkTime, userId, consignee, tel, address, status) 
+        VALUES (?, NOW(), ?, ?, ?, ?, ?)`,
+      [orderNumber, userId, consignee, tel, address, status]
+    );
+
+    // 抓取圖片路徑
+    const productIds = products.map(p => p.productId);
+    const [images] = await conn.query(
+      `SELECT id AS productId, imgUrls 
+         FROM products 
+         WHERE id IN (?)`,
+      [productIds]
+    );
+
+    // 建立商品與網址的對應，只存字串
+    const imgMap = {};
+    images.forEach(row => {
+      imgMap[row.productId] = row.imgUrls;
+    });
+
+    // 新增商品明細到 orderInfor 表
+    const insertedProducts = [];
+    for (const item of products) {
+      const { productId, productName, salePrice, qty } = item;
+      const raw = imgMap[productId];
+
+      let imgUrlsToStore = '';
+      // 如果 raw 是物件或陣列，就 stringify；若是字串直接存；若 undefined 則存空字串
+      if (typeof raw === 'object') {
+        imgUrlsToStore = JSON.stringify(raw);
+      } else if (typeof raw === 'string') {
+        imgUrlsToStore = raw;
+      }
+      
+      await conn.query(
+        `INSERT INTO orderInfor (orderNumber, productId, productName, salePrice, qty, imgUrls) 
+          VALUES (?, ?, ?, ?, ?, ?)`,
+        [orderNumber, productId, productName, salePrice, qty, imgUrlsToStore]
+      );
+
+      insertedProducts.push({
+        productId,
+        productName,
+        salePrice,
+        qty,
+        imgUrls: imgUrlsToStore
+      });
     }
 
-    let conn;
-    try {
-        conn = await pool.getConnection();
-        await conn.beginTransaction();
-
-        // 新增訂單基本資料到 orderCustomers 表
-        await conn.query(
-            `INSERT INTO orderCustomers (orderNumber, checkTime, userId, consignee, tel, address, status) 
-             VALUES (?, NOW(), ?, ?, ?, ?, ?)`,
-            [orderNumber, userId, consignee, tel, address, status]
-        );
-
-        // 新增商品明細到 orderInfor 表
-        for (const { productId, productName, salePrice, qty } of products) {
-            await conn.query(
-                `INSERT INTO orderInfor (orderNumber, productId, productName, salePrice, qty) 
-                 VALUES (?, ?, ?, ?, ?)`,
-                [orderNumber, productId, productName, salePrice, qty]
-            );
-        }
-
-        await conn.commit();
-        
-        res.status(201).json({
-            message: '訂單新增成功',
-            order: {
-            orderNumber,
-            userId,
-            consignee,
-            tel,
-            address,
-            status,
-            products
-            }
-        });
-    } catch (err) {
-        if (conn) await conn.rollback();
-        res.status(500).json({ error: err.message });
-    } finally {
-        if (conn) conn.release();
-    }
+    await conn.commit();
+    
+    res.status(201).json({
+      message: '訂單新增成功',
+      order: {
+        orderNumber,
+        userId,
+        consignee,
+        tel,
+        address,
+        status,
+        products: insertedProducts
+      }
+    });
+  } catch (err) {
+    if (conn) await conn.rollback();
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (conn) conn.release();
+  }
 });
 
+// 查看訂單資訊(單獨用戶所有訂單)
 /**
  * @openapi
  * /admin/orders:
@@ -1104,7 +1143,7 @@ router.post('/orders', checkLogin(true), async (req, res) => {
  *     summary: 查看使用者所有訂單
  *     description: |
  *       - 一般會員只會看到自己的所有訂單  
- *       - 管理員可透過 query 參數指定 userId 來查看該使用者的所有訂單  
+ *       - 管理員可透過 query.userId 指定要查看的使用者  
  *     tags: [Admin - 訂單管理]
  *     security:
  *       - groupHeader: []
@@ -1159,6 +1198,10 @@ router.post('/orders', checkLogin(true), async (req, res) => {
  *                         productSubtotal:
  *                           type: number
  *                           example: 998
+ *                         imgUrls:
+ *                           type: string
+ *                           description: "圖片網址"
+ *                           example: "/uploads/products/img_5g6wrd.png"
  *                   totalAmount:
  *                     type: number
  *                     example: 998
@@ -1173,17 +1216,19 @@ router.get('/orders', checkLogin(false), async (req, res) => {
   const currentUserId = req.userId;
   const isAdmin       = req.isAdmin;
   const queryUserId   = Number(req.query.userId);
+
+  // 管理員可指定 userId，一般會員強制是自己的
   const targetUserId  = isAdmin && queryUserId ? queryUserId : currentUserId;
   let conn;
 
   try {
     conn = await pool.getConnection();
 
-    // 撈訂單與明細
+    // 撈取所有訂單與其明細，SQL 先按 checkTime DESC 排序
     const [rows] = await conn.query(
       `SELECT
          oc.orderNumber,
-         oc.checkTime,
+         DATE_FORMAT(oc.checkTime, '%Y-%m-%d %H:%i:%s') AS checkTime,
          oc.consignee,
          oc.tel,
          oc.address,
@@ -1191,7 +1236,8 @@ router.get('/orders', checkLogin(false), async (req, res) => {
          oi.productName,
          oi.salePrice,
          oi.qty,
-         (oi.salePrice * oi.qty) AS productSubtotal
+         (oi.salePrice * oi.qty) AS productSubtotal,
+         oi.imgUrls
        FROM orderCustomers AS oc
        JOIN orderInfor    AS oi
          ON oc.orderNumber = oi.orderNumber
@@ -1219,16 +1265,21 @@ router.get('/orders', checkLogin(false), async (req, res) => {
           totalAmount:  0
         };
       }
-      ordersMap[r.orderNumber].items.push({
+      const ord = ordersMap[r.orderNumber];
+      ord.items.push({
         productName:     r.productName,
         salePrice:       r.salePrice,
         qty:             r.qty,
-        productSubtotal: r.productSubtotal
+        productSubtotal: r.productSubtotal,
+        imgUrls:         r.imgUrls || ''   
       });
-      ordersMap[r.orderNumber].totalAmount += r.productSubtotal;
+      ord.totalAmount += r.productSubtotal;
     });
 
-    const orders = Object.values(ordersMap);
+    // 轉成陣列，並再次用 JS 按時間排序
+    const orders = Object.values(ordersMap)
+      .sort((a, b) => new Date(b.checkTime) - new Date(a.checkTime));
+
     res.json(orders);
 
   } catch (err) {
@@ -1261,6 +1312,37 @@ router.get('/orders', checkLogin(false), async (req, res) => {
  *     responses:
  *       200:
  *         description: 成功回傳訂單資訊
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 orderNumber:
+ *                   type: string
+ *                 recipientName:
+ *                   type: string
+ *                 recipientPhone:
+ *                   type: string
+ *                 recipientAddress:
+ *                   type: string
+ *                 items:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       productName:
+ *                         type: string
+ *                       salePrice:
+ *                         type: number
+ *                       qty:
+ *                         type: integer
+ *                       productSubtotal:
+ *                         type: number
+ *                       imgUrls:
+ *                         type: string
+ *                         description: "圖片網址"
+ *                 totalAmount:
+ *                   type: number
  *       403:
  *         description: 權限不足
  *       404:
@@ -1269,75 +1351,77 @@ router.get('/orders', checkLogin(false), async (req, res) => {
  *         description: 伺服器錯誤
  */
 router.get('/orders/:orderNumber', checkLogin(false), async (req, res) => {
-    const { orderNumber } = req.params;
-    const currentUserId = req.userId;
-    const isAdmin = req.isAdmin;
-    let conn;
+  const { orderNumber } = req.params;
+  const currentUserId = req.userId;
+  const isAdmin = req.isAdmin;
+  let conn;
 
-    try {
-        const conn = await pool.getConnection();
+  try {
+    conn = await pool.getConnection();
 
-        // 1. 查訂單擁有者
-        const [ownerRows] = await conn.query(
-            'SELECT userId FROM orderCustomers WHERE orderNumber = ?',
-            [orderNumber]
-        );
-        if (ownerRows.length === 0) {
-            return res.status(404).json({ error: '找不到該訂單' });
-        }
-
-        // 2. 權限檢查
-        const ownerId = ownerRows[0].userId;
-        if (!isAdmin && ownerId !== currentUserId) {
-            return res.status(403).json({ error: '權限不足' });
-        }
-
-        // 3. 取得訂單明細
-        const [rows] = await conn.query(`
-            SELECT 
-                oc.orderNumber,
-                oc.consignee AS recipientName,
-                oc.tel AS recipientPhone,
-                oc.address AS recipientAddress,
-                oi.productName,
-                oi.salePrice,
-                oi.qty,
-                (oi.salePrice * oi.qty) AS productSubtotal
-            FROM orderCustomers AS oc
-            JOIN orderInfor AS oi ON oc.orderNumber = oi.orderNumber
-            WHERE oc.orderNumber = ?
-        `, [orderNumber]);
-
-        if (rows.length === 0) {
-            return res.status(404).json({ error: '找不到該訂單' });
-        }
-
-        // 4. 聚合回傳單一訂單的資料
-        const order = {
-            orderNumber: rows[0].orderNumber,
-            recipientName: rows[0].recipientName,
-            recipientPhone: rows[0].recipientPhone,
-            recipientAddress: rows[0].recipientAddress,
-            items: [],
-            totalAmount: 0
-        };
-
-        rows.forEach(row => {
-            order.items.push({
-                productName: row.productName,
-                salePrice: row.salePrice,
-                qty: row.qty,
-                productSubtotal: row.productSubtotal
-            });
-            order.totalAmount += row.productSubtotal;
-        });
-
-        res.json(order);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    } finally {
-        if (conn) conn.release();
+    // 1. 查訂單擁有者
+    const [ownerRows] = await conn.query(
+      'SELECT userId FROM orderCustomers WHERE orderNumber = ?',
+      [orderNumber]
+    );
+    if (ownerRows.length === 0) {
+      return res.status(404).json({ error: '找不到該訂單' });
     }
+
+    // 2. 權限檢查
+    const ownerId = ownerRows[0].userId;
+    if (!isAdmin && ownerId !== currentUserId) {
+      return res.status(403).json({ error: '權限不足' });
+    }
+
+    // 3. 取得訂單明細
+    const [rows] = await conn.query(`
+      SELECT 
+        oc.orderNumber,
+        oc.consignee AS recipientName,
+        oc.tel AS recipientPhone,
+        oc.address AS recipientAddress,
+        oi.productName,
+        oi.salePrice,
+        oi.qty,
+        (oi.salePrice * oi.qty) AS productSubtotal,
+        oi.imgUrls
+      FROM orderCustomers AS oc
+      JOIN orderInfor AS oi ON oc.orderNumber = oi.orderNumber
+      WHERE oc.orderNumber = ?
+      `, [orderNumber]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: '找不到該訂單' });
+    }
+
+    // 4. 聚合回傳單一訂單的資料
+    const order = {
+      orderNumber: rows[0].orderNumber,
+      recipientName: rows[0].recipientName,
+      recipientPhone: rows[0].recipientPhone,
+      recipientAddress: rows[0].recipientAddress,
+      items: [],
+      totalAmount: 0
+    };
+
+    rows.forEach(row => {
+      order.items.push({
+        productName: row.productName,
+        salePrice: row.salePrice,
+        qty: row.qty,
+        productSubtotal: row.productSubtotal,
+        imgUrls: row.imgUrls || ''
+      });
+      order.totalAmount += row.productSubtotal;
+    });
+
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    if (conn) conn.release();
+  }
 });
 
 // 修改訂單狀態

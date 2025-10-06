@@ -12,7 +12,7 @@ const router = express.Router();
  * /users/login:
  *   post:
  *     summary: 使用者登入
- *     description: 用戶登入
+ *     description: 用戶登入，成功後回傳使用者完整資訊
  *     tags: [Users - 會員管理]
  *     requestBody:
  *       required: true
@@ -36,7 +36,7 @@ const router = express.Router();
  *                 example: "swagger"
  *     responses:
  *       200:
- *         description: 登入成功，返回使用者 ID
+ *         description: 登入成功，返回使用者資訊
  *         content:
  *           application/json:
  *             schema:
@@ -48,6 +48,19 @@ const router = express.Router();
  *                 userId:
  *                   type: integer
  *                   example: 13
+ *                 admin:
+ *                   type: boolean
+ *                   example: false
+ *                 userName:
+ *                   type: string
+ *                   example: "小明"
+ *                 email:
+ *                   type: string
+ *                   format: email
+ *                   example: "swagger@mail.com"
+ *                 tel:
+ *                   type: string
+ *                   example: "0912345678"
  *       401:
  *         description: Email 或密碼錯誤
  *         content:
@@ -70,30 +83,40 @@ const router = express.Router();
  *                   example: 登入失敗，請稍後在試
  */
 router.post('/login', async (req, res) => {
-    const { email, password } = req.body;
+  const { email, password } = req.body;
+  let conn;
 
-    try {
-        const conn = await pool.getConnection();
-        const [rows] = await conn.query('SELECT id, password FROM users WHERE email = ?', [email]);
-        conn.release();
+  try {
+    conn = await pool.getConnection();
+    const [rows] = await conn.query('SELECT id, password, admin, userName, email, tel FROM users WHERE email = ?', [email]);
+    conn.release();
 
-        // 比對信箱是否正確
-        if (rows.length === 0) {
-            return res.status(401).json({ error: 'Email 或密碼錯誤' });
-        }
-
-        const user = rows[0];
-        const isPasswordValid = await bcrypt.compare(password, user.password);
-
-        // 比對密碼是否正確
-        if (!isPasswordValid) {
-            return res.status(401).json({ error: 'Email 或密碼錯誤' });
-        }
-
-        res.json({ message: '登入成功', userId: user.id });
-    } catch (err) {
-        res.status(500).json({ message: '登入失敗，請稍後再試' });
+    // 比對信箱是否正確
+    if (rows.length === 0) {
+      return res.status(401).json({ error: 'Email 或密碼錯誤' });
     }
+
+    const user = rows[0];
+    const isValid = await bcrypt.compare(password, user.password);
+
+    // 比對密碼是否正確
+    if (!isValid) {
+      return res.status(401).json({ error: 'Email 或密碼錯誤' });
+    }
+
+    // 4. 回傳使用者資訊（不回傳 password）
+    res.status(200).json({
+      message:  '登入成功',
+      userId:   user.id,
+      admin:    user.admin,
+      userName: user.userName,
+      email:    user.email,
+      tel:      user.tel
+    });
+  } catch (err) {
+    if (conn) conn.release();
+    res.status(500).json({ message: '登入失敗，請稍後再試' });
+  }
 });
 
 // 註冊
