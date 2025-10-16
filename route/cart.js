@@ -111,17 +111,21 @@ router.get('/', checkLogin(false), async (req, res) => {
  *                 message:
  *                   type: string
  *                   example: "已加入購物車"
- *                 item:
- *                   type: object
- *                   properties:
- *                     productId:
- *                       type: integer
- *                     productName:
- *                       type: string
- *                     salePrice:
- *                       type: number
- *                     qty:
- *                       type: integer
+ *                 cart:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       productId:
+ *                         type: integer
+ *                       productName:
+ *                         type: string
+ *                       salePrice:
+ *                         type: number
+ *                       qty:
+ *                         type: integer
+ *                       imgUrls:
+ *                         type: string
  *       400:
  *         description: 欄位不完整或型別錯誤
  *       404:
@@ -143,7 +147,9 @@ router.post('/', checkLogin(false), async (req, res) => {
 
     // 1. 確認商品存在且已上架，同時取 title & salePrice
     const [prdRows] = await conn.query(
-      'SELECT title AS productName, salePrice FROM products WHERE id = ? AND sell = 1',
+      `SELECT title AS productName, salePrice, CAST(imgUrls AS CHAR) AS imgUrls
+       FROM products
+       WHERE id = ? AND sell = 1`,
       [productId]
     );
     if (prdRows.length === 0) {
@@ -172,7 +178,8 @@ router.post('/', checkLogin(false), async (req, res) => {
       `SELECT c.productId,
               p.title       AS productName,
               p.salePrice,
-              c.qty
+              c.qty,
+              CAST(p.imgUrls AS CHAR) AS imgUrls
        FROM cart c
        JOIN products p
          ON c.productId = p.id
@@ -240,6 +247,8 @@ router.post('/', checkLogin(false), async (req, res) => {
  *                         type: number
  *                       qty:
  *                         type: integer
+ *                       imgUrls:
+ *                         type: string
  *       400:
  *         description: 欄位錯誤或 qty < 0
  *       404:
@@ -290,7 +299,8 @@ router.patch('/', checkLogin(false), async (req, res) => {
       `SELECT c.productId,
               p.title       AS productName,
               p.salePrice,
-              c.qty
+              c.qty,
+              CAST(p.imgUrls AS CHAR) AS imgUrls
        FROM cart c
        JOIN products p
          ON c.productId = p.id
